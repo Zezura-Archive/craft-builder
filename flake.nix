@@ -87,6 +87,7 @@
           rust-analyzer
           openssl
           gh
+          just
         ]);
       PKG_CONFIG_PATH = alsaPkgConfig;
     };
