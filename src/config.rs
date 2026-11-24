@@ -25,7 +25,7 @@ pub struct Config {
     pub rustc_wrapper: String,
     pub craft_fonts_cache: PathBuf,
     pub sccache_dir: PathBuf,
-    /// Owner of the listed repos (`org` in the config file, `FORK_OWNER` overrides).
+    /// Owner of the listed repos (`org` in the config file).
     pub fork_owner: String,
     /// Bare repo names in `fork_owner`.
     pub apps: Vec<String>,
@@ -119,7 +119,7 @@ impl Config {
     }
 
     /// Build from a config file and an env lookup (injectable for tests).
-    /// Precedence: command line, then environment, then config file, then default.
+    /// Precedence: command line, then config file, then default; settings without a config key come from the environment.
     pub fn from_lookup(
         opts: &Options,
         file: &FileConfig,
@@ -144,19 +144,15 @@ impl Config {
                 .clone()
                 .or_else(|| file.clone_dir.clone())
                 .unwrap_or_else(|| home.join("repos/craft-apps")),
-            build_dir: path_or(
-                "BUILD_DIR",
-                file.build_dir
-                    .clone()
-                    .unwrap_or_else(|| home.join("builds/craft-apps")),
-            ),
+            build_dir: file
+                .build_dir
+                .clone()
+                .unwrap_or_else(|| home.join("builds/craft-apps")),
             cargo_target_dir: path_or("CARGO_TARGET_DIR", cache.join("target")),
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
             craft_fonts_cache: path_or("CRAFT_FONTS_CACHE", cache.join("craft-fonts")),
             sccache_dir: path_or("SCCACHE_DIR", sccache_base.join("sccache")),
-            fork_owner: nonempty("FORK_OWNER")
-                .or_else(|| file.org.clone())
-                .unwrap_or_else(|| "Zezura-Archive".into()),
+            fork_owner: file.org.clone().unwrap_or_else(|| "Zezura-Archive".into()),
             apps: file.apps.clone(),
             libraries: file.libraries.clone(),
             config_path: file.path.clone(),
@@ -276,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn command_line_and_env_override_config_file() {
+    fn command_line_overrides_config_file_and_env_does_not() {
         let file = FileConfig {
             build_dir: Some("/f/build".into()),
             clone_dir: Some("/f/clone".into()),
@@ -287,10 +283,11 @@ mod tests {
             ..Options::default()
         };
         let c = Config::from_lookup(&opts, &file, Path::new("/h"), |k| {
-            (k == "BUILD_DIR").then(|| "/env".to_owned())
+            matches!(k, "BUILD_DIR" | "FORK_OWNER").then(|| "/env".to_owned())
         });
         assert_eq!(c.dest_dir, Path::new("/cli"));
-        assert_eq!(c.build_dir, Path::new("/env"));
+        assert_eq!(c.build_dir, Path::new("/f/build"));
+        assert_eq!(c.fork_owner, "Zezura-Archive");
     }
 
     #[test]
@@ -333,20 +330,6 @@ mod tests {
         assert_eq!(c.libraries, ["egui"]);
         assert!(c.config_path.is_some());
         assert!(c.ensure_repos_listed().is_ok());
-    }
-
-    #[test]
-    fn fork_owner_env_overrides_org() {
-        let file = FileConfig {
-            org: Some("Acme".into()),
-            ..FileConfig::default()
-        };
-        assert_eq!(config_with(&file, &[]).fork_owner, "Acme");
-        assert_eq!(
-            config_with(&file, &[("FORK_OWNER", "Other")]).fork_owner,
-            "Other"
-        );
-        assert_eq!(config_with(&file, &[("FORK_OWNER", "")]).fork_owner, "Acme");
     }
 
     #[test]

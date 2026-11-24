@@ -182,7 +182,7 @@ fn build_phase(
     built
 }
 
-/// Phase 3: release the built repos owned by FORK_OWNER.
+/// Phase 3: release the built repos owned by the org.
 async fn release_phase(ctx: &Ctx, env: &GitEnv, built: &[RepoItem], failures: &mut Failures) {
     let mut log = Log::live();
     for item in built.iter().filter(|i| i.kind == RepoKind::App) {

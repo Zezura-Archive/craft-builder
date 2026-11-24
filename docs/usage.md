@@ -24,10 +24,6 @@ nix run . -- --build --only filmcraft,effectcraft     # two repos, no release
 nix run . -- -j 8 ~/archive                           # 8 parallel syncs, custom DEST_DIR
 ```
 
-```bash
-FORK_OWNER=Other-Org nix run .                        # repos from another org
-```
-
 ## Options
 
 At most one of `--sync`, `--build`, `--release` and `--clean` may be given.
@@ -52,14 +48,14 @@ Unselected apps (`--only`) aren't synced, built or released, but their existing 
 `$XDG_CONFIG_HOME/craft-builder/config.toml`, else `~/.config/craft-builder/config.toml`, or the file given with `--config`. It must list at least one app or library; every other key is optional:
 
 ```toml
-org = "Zezura-Archive"               # owner of the repos; like FORK_OWNER
+org = "Zezura-Archive"               # owner of the repos; only its repos are released
 apps = ["filmcraft", "effectcraft"]  # built and released
 libraries = ["craft-libs", "egui"]   # synced first; never built or released
-build_dir = "~/builds/craft-apps/"   # like BUILD_DIR
+build_dir = "~/builds/craft-apps/"   # where binaries go, in <name>/
 clone_dir = "~/repos/craft-apps/"    # like DEST_DIR
 ```
 
-`apps` and `libraries` are bare repo names in `org`, and a name may appear only once across both. Libraries are forks that apps depend on through git dependencies. A leading `~` means your home directory. Unknown keys are an error. `DEST_DIR`, `BUILD_DIR` and `FORK_OWNER` override the file.
+`apps` and `libraries` are bare repo names in `org`, and a name may appear only once across both. Libraries are forks that apps depend on through git dependencies. A leading `~` means your home directory. Unknown keys are an error. `DEST_DIR` overrides `clone_dir`. Defaults: `org` is `Zezura-Archive`, `build_dir` is `~/builds/craft-apps`.
 
 ## Environment variables
 
@@ -67,8 +63,6 @@ Empty values count as unset, except where noted.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FORK_OWNER` | `org` from the [config file](#config-file), else `Zezura-Archive` | User or org that owns the listed repos. Only its repos are released. Case-insensitive. |
-| `BUILD_DIR` | `build_dir` from the [config file](#config-file), else `~/builds/craft-apps` | Where binaries go, in `<name>/`. |
 | `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos. |
 | `RUSTC_WRAPPER` | `sccache` | Compiler wrapper. Set it empty for none. |
 | `SCCACHE_DIR` | `$XDG_CACHE_HOME/sccache`, else `~/.cache/sccache` | sccache cache. Also what `--clean` removes. |
@@ -91,7 +85,7 @@ Libraries are synced first, in a pass that finishes before the apps are synced. 
    - Any commit pinned by `Cargo.lock` that a clone lacks is fetched into it from your fork first. If that fails the repo isn't built.
    - Fonts: if `.github/workflows/release.yml` pins a [storytold/craft-fonts](https://github.com/storytold/craft-fonts) commit, it is checked out into `CRAFT_FONTS_CACHE` and builds get `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`. If the checkout fails the repo isn't built.
    - Builds run in release mode from the working tree, so a clone that isn't on the default branch is reported and not built.
-   - The repo's main binary (the bin named after the repo) is built for both targets and copied to `BUILD_DIR/<name>/`:
+   - The repo's main binary (the bin named after the repo) is built for both targets and copied to `build_dir/<name>/`:
      - `<name>-linux-x86_64`: `cargo zigbuild` for `x86_64-unknown-linux-gnu`, pinned to glibc 2.35 so it runs on non-NixOS systems.
      - `<name>-windows-x86_64.exe`: `cargo xwin build` for `x86_64-pc-windows-msvc`. The MSVC CRT/SDK is downloaded into `~/.cache/cargo-xwin` on first use.
    - macOS is not built. Windows icon and version resources are not embedded.
@@ -99,13 +93,13 @@ Libraries are synced first, in a pass that finishes before the apps are synced. 
    - Apps with neither are only synced.
    - sccache hit/miss stats are printed at the end of the run.
 3. **Release**, per built app:
-   - Only repos owned by `FORK_OWNER` and built for both targets are released.
+   - Only repos owned by `org` and built for both targets are released.
    - The release tag is `v<version>-forked`, from the binary's version in `cargo metadata`, targeting the built commit.
    - An existing release for that tag is updated in place: its tag is moved to the built commit, and assets and notes are replaced. If the tag already points at the built commit, nothing is done.
 
 Non-fork repos in the config are only cloned or fetched and fast-forwarded. A fork whose branch has diverged from upstream, an archived fork, or a local clone with diverged commits is reported as failed, not overwritten. Failures are listed at the end and the exit code is 1.
 
-`--clean` stops the sccache server (if installed), then removes `CARGO_TARGET_DIR` and `SCCACHE_DIR`. It refuses to remove `/` or `$HOME`. `DEST_DIR`, `BUILD_DIR` and `CRAFT_FONTS_CACHE` are kept.
+`--clean` stops the sccache server (if installed), then removes `CARGO_TARGET_DIR` and `SCCACHE_DIR`. It refuses to remove `/` or `$HOME`. `DEST_DIR`, `build_dir` and `CRAFT_FONTS_CACHE` are kept.
 
 ## Token
 
@@ -122,8 +116,8 @@ The GitHub token is the first non-empty of:
 Before syncing, the tool checks and exits with the fix if one fails (not run for `--clean`):
 
 - The token has the `repo`, `workflow` and `read:org` scopes (`admin:org` or `write:org` also satisfy `read:org`). Skipped, with a warning, for fine-grained or app tokens, which report no scopes.
-- You are `FORK_OWNER` or an active member of that org. This also catches an org that restricts OAuth app access; approve the app under the org's Settings, Third-party access.
-- You have write access (`WRITE`, `MAINTAIN` or `ADMIN`) to every fork in the config. Forks not owned by `FORK_OWNER` are flagged as sync-only.
+- You are the `org` user or an active member of the `org` org. This also catches an org that restricts OAuth app access; approve the app under the org's Settings, Third-party access.
+- You have write access (`WRITE`, `MAINTAIN` or `ADMIN`) to every fork in the config. Forks not owned by `org` are flagged as sync-only.
 
 Most scope problems are fixed with:
 
