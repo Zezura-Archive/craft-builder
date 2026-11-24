@@ -138,7 +138,26 @@ impl Config {
             self.build_dir = writable_dir(&self.build_dir, "build directory")?;
             self.cargo_target_dir = writable_dir(&self.cargo_target_dir, "cargo target directory")?;
         }
+        if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+            for (what, dir) in self.windows_drive_dirs() {
+                eprintln!(
+                    "WARNING: the {what} {} is on a Windows drive; git and cargo are much slower there than on the WSL filesystem.",
+                    dir.display()
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// The source and cache dirs this run uses that are under `/mnt` (Windows drives on WSL).
+    fn windows_drive_dirs(&self) -> Vec<(&'static str, &Path)> {
+        let mut dirs = vec![("destination directory", self.dest_dir.as_path())];
+        if self.build {
+            dirs.push(("cargo target directory", &self.cargo_target_dir));
+            dirs.push(("sccache directory", &self.sccache_dir));
+        }
+        dirs.retain(|(_, dir)| dir.starts_with("/mnt"));
+        dirs
     }
 }
 
@@ -264,6 +283,23 @@ mod tests {
         );
         assert_eq!(c.sccache_dir, Path::new("/home/u/.cache/sccache"));
         assert!(c.build && c.release);
+    }
+
+    #[test]
+    fn windows_drive_dirs_are_those_under_mnt() {
+        let mut c = config(&[
+            ("CARGO_TARGET_DIR", "/mnt/c/target"),
+            ("SCCACHE_DIR", "/mnt2/s"),
+        ]);
+        let names = |c: &Config| -> Vec<&str> {
+            c.windows_drive_dirs()
+                .into_iter()
+                .map(|(what, _)| what)
+                .collect()
+        };
+        assert_eq!(names(&c), ["cargo target directory"]);
+        c.build = false;
+        assert!(names(&c).is_empty());
     }
 
     #[test]

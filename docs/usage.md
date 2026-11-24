@@ -75,6 +75,8 @@ Empty values count as unset, except where noted.
 | `XDG_CONFIG_HOME` | `~/.config` | Where the default [config file](#config-file) is looked for. |
 | `HOME` | none | Required. |
 
+On WSL, a warning is printed when `DEST_DIR`, `CARGO_TARGET_DIR` or `SCCACHE_DIR` is under `/mnt/`: that's a Windows drive, where git and cargo are much slower.
+
 The token variables are listed under [Token](#token).
 
 ## Phases
