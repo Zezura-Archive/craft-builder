@@ -2,6 +2,8 @@
 
 Syncs the GitHub forks listed in your star lists, cross-builds them for Linux and Windows, and releases the binaries.
 
+craft-builder itself runs only on Linux (`x86_64-linux`).
+
 ## Build
 
 ```bash
