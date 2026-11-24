@@ -23,8 +23,10 @@ or install the built package from `./result/bin/craft-builder`. Both wrap the bi
 ## Usage
 
 ```bash
-nix run . -- [options] [DEST_DIR]
+nix run . -- [options]
 ```
+
+Or use the justfile (`just` is in the dev shell; `just --list` shows the recipes): `just sync`, `just build`, `just release` and `just clean`. Extra options pass through, for example `just build --only filmcraft`.
 
 It needs a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login`). Options, the config file, environment variables, phases and access requirements are in [docs/usage.md](docs/usage.md).
 
