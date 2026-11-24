@@ -3,9 +3,11 @@
 use crate::gitenv::GitEnv;
 use crate::repo::RepoItem;
 use crate::report::Log;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// Where git dependencies come from; lives across all repos of a run.
 #[derive(Debug, Default)]
@@ -65,10 +67,143 @@ pub fn setup_rewrites(
 /// missing shas: print `Fetching N pinned commit(s) into {dir}...`, then `crate::git::fetch_cli`.
 /// Never modifies `Cargo.lock`.
 pub fn prepare_git_deps(
-    _sources: &mut Sources,
-    _dir: &Path,
-    _env: &GitEnv,
-    _log: &mut Log,
+    sources: &mut Sources,
+    dir: &Path,
+    env: &GitEnv,
+    log: &mut Log,
 ) -> Result<()> {
-    todo!("spec §6.5")
+    let lock = dir.join("Cargo.lock");
+    if !lock.is_file() {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&lock)
+        .with_context(|| format!("failed to read {}", lock.display()))?;
+
+    let mut seen = HashSet::new();
+    let mut missing: Vec<(PathBuf, Vec<String>)> = Vec::new();
+    for (upstream, sha) in text.lines().filter_map(parse_git_source) {
+        if !seen.insert((upstream.clone(), sha.clone())) {
+            continue;
+        }
+        if let Some(clone) = sources.local.get(&upstream) {
+            if crate::git::has_commit(clone, &sha) {
+                continue;
+            }
+            match missing.iter_mut().find(|(d, _)| d == clone) {
+                Some((_, shas)) => shas.push(sha),
+                None => missing.push((clone.clone(), vec![sha])),
+            }
+        } else if !sources.fork.contains_key(&upstream) && sources.reported.insert(upstream.clone())
+        {
+            log.out(format!(
+                "NOTE: no copy of {upstream} in the star lists; fetching it from upstream."
+            ));
+        }
+    }
+
+    for (clone, shas) in missing {
+        log.out(format!(
+            "Fetching {} pinned commit(s) into {}...",
+            shas.len(),
+            clone.display()
+        ));
+        let refs: Vec<&str> = shas.iter().map(String::as_str).collect();
+        crate::git::fetch_cli(&clone, &refs, env, log)?;
+    }
+    Ok(())
+}
+
+/// `(upstream, sha)` of a Cargo.lock `source = "git+https://github.com/..#<sha>"` line.
+fn parse_git_source(line: &str) -> Option<(String, String)> {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"^source = "git\+https://github\.com/([^/?#]+/[^?#]+)(\?[^#]*)?#([0-9a-f]{40})"$"#,
+        )
+        .unwrap()
+    });
+    let caps = RE.captures(line)?;
+    let upstream = caps[1].strip_suffix(".git").unwrap_or(&caps[1]);
+    Some((upstream.to_owned(), caps[3].to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::Options;
+    use crate::config::Config;
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn parse(line: &str) -> Option<(String, String)> {
+        parse_git_source(line)
+    }
+
+    #[test]
+    fn parses_source_lines_and_strips_dot_git() {
+        let want = Some(("o/r".to_owned(), SHA.to_owned()));
+        for url in ["o/r", "o/r.git"] {
+            let line = format!(r#"source = "git+https://github.com/{url}#{SHA}""#);
+            assert_eq!(parse(&line), want, "{url}");
+        }
+        let line = format!(r#"source = "git+https://github.com/o/r?branch=main#{SHA}""#);
+        assert_eq!(parse(&line), want);
+    }
+
+    #[test]
+    fn ignores_other_lines() {
+        for line in [
+            r#"source = "registry+https://github.com/rust-lang/crates.io-index""#,
+            r#"source = "git+https://gitlab.com/o/r#0123456789abcdef0123456789abcdef01234567""#,
+            r#"source = "git+https://github.com/o/r#0123""#,
+            r#"source = "git+https://github.com/o#0123456789abcdef0123456789abcdef01234567""#,
+            r#" source = "git+https://github.com/o/r#0123456789abcdef0123456789abcdef01234567""#,
+            "",
+        ] {
+            assert_eq!(parse(line), None, "{line}");
+        }
+    }
+
+    fn env() -> GitEnv {
+        let cfg = Config::from_lookup(&Options::default(), Path::new("/home/u"), |_| None);
+        GitEnv::with_inherited_count(&cfg, "tok", 0, true)
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("craft-builder-deps-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_lock_is_fine_and_unknown_upstream_is_noted_once() {
+        let dir = temp_dir("lock");
+        let mut sources = Sources::default();
+        let mut log = Log::buffered();
+        prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
+        assert_eq!(log.into_buffer(), "");
+
+        let line = format!(r#"source = "git+https://github.com/o/r#{SHA}""#);
+        std::fs::write(dir.join("Cargo.lock"), format!("{line}\n{line}\n")).unwrap();
+        let mut log = Log::buffered();
+        prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
+        prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
+        assert_eq!(
+            log.into_buffer(),
+            "NOTE: no copy of o/r in the star lists; fetching it from upstream.\n"
+        );
+    }
+
+    #[test]
+    fn fork_source_is_not_noted() {
+        let dir = temp_dir("fork");
+        let line = format!(r#"source = "git+https://github.com/o/r#{SHA}""#);
+        std::fs::write(dir.join("Cargo.lock"), line).unwrap();
+        let mut sources = Sources::default();
+        sources.fork.insert("o/r".into(), "me/r".into());
+        let mut log = Log::buffered();
+        prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
+        assert_eq!(log.into_buffer(), "");
+    }
 }
