@@ -64,6 +64,21 @@ impl RepoItem {
     }
 }
 
+/// Fail if two items would share a `dest_dir/<name>`.
+pub fn ensure_unique_names(items: &[RepoItem]) -> Result<()> {
+    let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for item in items {
+        if let Some(first) = seen.insert(item.name(), &item.repo) {
+            bail!(
+                "{first} and {} share the directory name '{}'; narrow the selection with --only.",
+                item.repo,
+                item.name()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Narrow `all` to the repos matching any wanted name; every name must match something.
 pub fn select_only(all: &[RepoItem], wanted: &[String]) -> Result<Vec<RepoItem>> {
     let unmatched: Vec<&str> = wanted
@@ -140,6 +155,16 @@ mod tests {
         assert_eq!(
             err,
             "--only matched nothing in the star lists for: x y\nRepos in the lists:\n  Me/lib"
+        );
+    }
+
+    #[test]
+    fn same_name_under_different_owners_is_an_error() {
+        assert!(ensure_unique_names(&[item("A/x", ""), item("B/y", "")]).is_ok());
+        let err = ensure_unique_names(&[item("A/x", ""), item("B/x", "")]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "A/x and B/x share the directory name 'x'; narrow the selection with --only."
         );
     }
 }

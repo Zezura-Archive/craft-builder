@@ -346,11 +346,13 @@ name = "craft-builder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "cargo_metadata",
  "clap",
  "git2",
  "octocrab",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
 ]

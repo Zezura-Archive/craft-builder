@@ -49,6 +49,7 @@ async fn run() -> Result<ExitCode> {
         println!("Selected {} of them with --only.", selected.len());
         selected
     };
+    repo::ensure_unique_names(&items)?;
     println!(
         "Syncing {} repo(s) into {}",
         items.len(),
