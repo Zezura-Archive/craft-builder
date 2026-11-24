@@ -113,12 +113,12 @@ impl Config {
                 .dest_dir
                 .clone()
                 .or_else(|| file.clone_dir.clone())
-                .unwrap_or_else(|| home.join("repos/craft-forks")),
+                .unwrap_or_else(|| home.join("repos/craft-apps")),
             build_dir: path_or(
                 "BUILD_DIR",
                 file.build_dir
                     .clone()
-                    .unwrap_or_else(|| home.join("builds/craft-forks")),
+                    .unwrap_or_else(|| home.join("builds/craft-apps")),
             ),
             cargo_target_dir: path_or("CARGO_TARGET_DIR", cache.join("target")),
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
@@ -252,8 +252,8 @@ mod tests {
         assert_eq!(c.star_list, "zezura-archive-craft");
         assert_eq!(c.libs_star_list, "zezura-archive-craft-libs");
         assert_eq!(c.fork_owner, "Zezura-Archive");
-        assert_eq!(c.dest_dir, Path::new("/home/u/repos/craft-forks"));
-        assert_eq!(c.build_dir, Path::new("/home/u/builds/craft-forks"));
+        assert_eq!(c.dest_dir, Path::new("/home/u/repos/craft-apps"));
+        assert_eq!(c.build_dir, Path::new("/home/u/builds/craft-apps"));
         assert_eq!(
             c.cargo_target_dir,
             Path::new("/home/u/.cache/craft-forks/target")

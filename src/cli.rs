@@ -72,7 +72,7 @@ struct Raw {
     /// Config file (default: ~/.config/craft-builder/config.toml).
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
-    /// Where repos are cloned (default: ~/repos/craft-forks).
+    /// Where repos are cloned (default: ~/repos/craft-apps).
     #[arg(value_name = "DEST_DIR")]
     dest_dir: Option<String>,
 }

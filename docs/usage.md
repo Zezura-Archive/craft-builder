@@ -34,7 +34,7 @@ At most one of `--sync`, `--build`, `--release` and `--clean` may be given.
 
 | Option | Description |
 | --- | --- |
-| `DEST_DIR` | Where repos are cloned. Overrides `clone_dir` from the [config file](#config-file). Default `~/repos/craft-forks`; created if missing. |
+| `DEST_DIR` | Where repos are cloned. Overrides `clone_dir` from the [config file](#config-file). Default `~/repos/craft-apps`; created if missing. |
 | `-c`, `--config FILE` | Read this [config file](#config-file) instead of the default one. It must exist. |
 | `--sync` | Sync only (phase 1). |
 | `--build` | Sync, then build (phases 1-2). No releases. |
@@ -67,7 +67,7 @@ Empty values count as unset, except where noted.
 | `STAR_LIST` | `zezura-archive-craft` | Star list of apps (exact match). |
 | `LIBS_STAR_LIST` | `zezura-archive-craft-libs` | Star list of libraries (exact match). A missing list is an error. Set it empty to read only `STAR_LIST`. |
 | `FORK_OWNER` | `Zezura-Archive` | User or org that owns the forks. Only its repos are released. Case-insensitive. |
-| `BUILD_DIR` | `build_dir` from the [config file](#config-file), else `~/builds/craft-forks` | Where binaries go, in `<name>/`. |
+| `BUILD_DIR` | `build_dir` from the [config file](#config-file), else `~/builds/craft-apps` | Where binaries go, in `<name>/`. |
 | `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos. |
 | `RUSTC_WRAPPER` | `sccache` | Compiler wrapper. Set it empty for none. |
 | `SCCACHE_DIR` | `$XDG_CACHE_HOME/sccache`, else `~/.cache/sccache` | sccache cache. Also what `--clean` removes. |
