@@ -70,6 +70,7 @@ Empty values count as unset, except where noted.
 | `BUILD_DIR` | `build_dir` from the [config file](#config-file), else `~/builds/craft-apps` | Where binaries go, in `<name>/`. |
 | `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos, with `linux/` and `windows/` subdirectories so both builds can run at once. |
 | `RUSTC_WRAPPER` | `sccache` | Compiler wrapper. Set it empty for none. |
+| `SCCACHE_CACHE_SIZE` | `30G` | sccache's cache size limit. Takes effect when the sccache server starts; run `sccache --stop-server` after changing it. |
 | `SCCACHE_DIR` | `$XDG_CACHE_HOME/sccache`, else `~/.cache/sccache` | sccache cache. Also what `--clean` removes. |
 | `CRAFT_FONTS_CACHE` | `~/.cache/craft-forks/craft-fonts` | craft-fonts checkout used by font-embedding builds. |
 | `XDG_CONFIG_HOME` | `~/.config` | Where the default [config file](#config-file) is looked for. |

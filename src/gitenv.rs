@@ -73,6 +73,7 @@ impl GitEnv {
         env.push_config("url.https://github.com/.insteadOf", "ssh://git@github.com/");
         env.set("CARGO_TARGET_DIR", cfg.cargo_target_dir.to_string_lossy());
         env.set("RUSTC_WRAPPER", &cfg.rustc_wrapper);
+        env.set("SCCACHE_CACHE_SIZE", &cfg.sccache_cache_size);
         if cfg.build {
             env.set("CARGO_NET_GIT_FETCH_WITH_CLI", "true");
         }
@@ -207,6 +208,7 @@ mod tests {
         assert_eq!(vars["GIT_TERMINAL_PROMPT"].as_deref(), Some("0"));
         assert_eq!(vars[TOKEN_VAR].as_deref(), Some("tok"));
         assert_eq!(vars["RUSTC_WRAPPER"].as_deref(), Some("sccache"));
+        assert_eq!(vars["SCCACHE_CACHE_SIZE"].as_deref(), Some("30G"));
         assert_eq!(
             vars["CARGO_NET_GIT_FETCH_WITH_CLI"].as_deref(),
             Some("true")

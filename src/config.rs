@@ -23,6 +23,8 @@ pub struct Config {
     pub rustc_wrapper: String,
     pub craft_fonts_cache: PathBuf,
     pub sccache_dir: PathBuf,
+    /// sccache's cache size limit, e.g. `30G`.
+    pub sccache_cache_size: String,
     pub star_list: String,
     /// Empty means read no libraries list.
     pub libs_star_list: String,
@@ -124,6 +126,7 @@ impl Config {
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
             craft_fonts_cache: path_or("CRAFT_FONTS_CACHE", cache.join("craft-fonts")),
             sccache_dir: path_or("SCCACHE_DIR", sccache_base.join("sccache")),
+            sccache_cache_size: nonempty("SCCACHE_CACHE_SIZE").unwrap_or_else(|| "30G".into()),
             star_list: nonempty("STAR_LIST").unwrap_or_else(|| "zezura-archive-craft".into()),
             libs_star_list: get("LIBS_STAR_LIST")
                 .unwrap_or_else(|| "zezura-archive-craft-libs".into()),
@@ -282,6 +285,11 @@ mod tests {
             Path::new("/home/u/.cache/craft-forks/craft-fonts")
         );
         assert_eq!(c.sccache_dir, Path::new("/home/u/.cache/sccache"));
+        assert_eq!(c.sccache_cache_size, "30G");
+        assert_eq!(
+            config(&[("SCCACHE_CACHE_SIZE", "50G")]).sccache_cache_size,
+            "50G"
+        );
         assert!(c.build && c.release);
     }
 
