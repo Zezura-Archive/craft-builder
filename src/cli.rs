@@ -19,8 +19,6 @@ pub struct Options {
     /// `--only` names: split on `,`, whitespace stripped, empties dropped.
     pub only: Vec<String>,
     pub jobs: usize,
-    /// `DEST_DIR`; `None` when absent or empty (the default then applies).
-    pub dest_dir: Option<PathBuf>,
     /// `--config` file; `None` means the default location.
     pub config: Option<PathBuf>,
 }
@@ -32,13 +30,12 @@ impl Default for Options {
             force: false,
             only: Vec::new(),
             jobs: 1,
-            dest_dir: None,
             config: None,
         }
     }
 }
 
-/// Sync every craft repo into DEST_DIR, build it for Linux and Windows, and release it.
+/// Sync every craft repo into `clone_dir`, build it for Linux and Windows, and release it.
 #[derive(Parser, Debug)]
 #[command(name = "craft-builder", version)]
 struct Raw {
@@ -72,9 +69,6 @@ struct Raw {
     /// Config file (default: ~/.config/craft-builder/config.toml).
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
-    /// Where repos are cloned (default: ~/repos/craft-apps).
-    #[arg(value_name = "DEST_DIR")]
-    dest_dir: Option<String>,
 }
 
 impl Options {
@@ -121,13 +115,7 @@ impl Options {
             return Err(fail("--only needs at least one repo name.".into()));
         }
 
-        if mode == Mode::Clean
-            && (raw.force
-                || only_given
-                || jobs != 1
-                || raw.dest_dir.is_some()
-                || raw.config.is_some())
-        {
+        if mode == Mode::Clean && (raw.force || only_given || jobs != 1 || raw.config.is_some()) {
             return Err(fail("--clean takes no other options or arguments.".into()));
         }
 
@@ -136,7 +124,6 @@ impl Options {
             force: raw.force,
             only,
             jobs,
-            dest_dir: raw.dest_dir.filter(|d| !d.is_empty()).map(PathBuf::from),
             config: raw.config,
         })
     }
@@ -180,7 +167,6 @@ mod tests {
         let o = parse(&[]).unwrap();
         assert_eq!(o.mode, Mode::Release);
         assert_eq!(o.jobs, 1);
-        assert!(o.dest_dir.is_none());
     }
 
     #[test]
@@ -225,7 +211,6 @@ mod tests {
             &["--clean", "-f"][..],
             &["--clean", "--only", "x"],
             &["--clean", "-j", "2"],
-            &["--clean", "dest"],
             &["--clean", "-c", "x.toml"],
         ] {
             assert!(msg(args).contains("--clean takes no other options or arguments."));
@@ -246,9 +231,9 @@ mod tests {
     }
 
     #[test]
-    fn one_positional_only() {
-        assert_eq!(parse(&["dest"]).unwrap().dest_dir, Some("dest".into()));
-        assert!(parse(&["a", "b"]).is_err());
-        assert!(parse(&[""]).unwrap().dest_dir.is_none());
+    fn positional_arguments_are_rejected() {
+        assert!(parse(&["dest"]).is_err());
+        assert!(parse(&[""]).is_err());
+        assert!(parse(&["--clean", "dest"]).is_err());
     }
 }

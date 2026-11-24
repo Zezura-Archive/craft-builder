@@ -29,7 +29,7 @@ fn org_access_error(org: &str, user: &str, membership: &str) -> String {
         "Approve GitHub CLI for the org (Settings -> Third-party access -> OAuth app policy), or re-authorize gh and grant the org:".to_owned()
     } else {
         format!(
-            "Check you're a member of '{org}' (and `org` in the config is right), then re-authorize gh, granting the org:"
+            "Check you're a member of '{org}' (and `fork_owner` in the config is right), then re-authorize gh, granting the org:"
         )
     };
     format!("can't access org '{org}' as {user}:\n  {membership}\n{advice}\n{REFRESH_HINT}")
@@ -191,7 +191,7 @@ mod scope_tests {
         let plain = org_access_error("O", "me", "gh: Not Found (HTTP 404)");
         assert_eq!(
             plain,
-            "can't access org 'O' as me:\n  gh: Not Found (HTTP 404)\nCheck you're a member of 'O' (and `org` in the config is right), then re-authorize gh, granting the org:\n  gh auth refresh -h github.com -s repo,workflow,read:org"
+            "can't access org 'O' as me:\n  gh: Not Found (HTTP 404)\nCheck you're a member of 'O' (and `fork_owner` in the config is right), then re-authorize gh, granting the org:\n  gh auth refresh -h github.com -s repo,workflow,read:org"
         );
         let restricted = org_access_error("O", "me", "OAuth App access restrictions");
         assert!(restricted.contains("Approve GitHub CLI for the org"));

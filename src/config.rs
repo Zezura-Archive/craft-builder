@@ -25,7 +25,7 @@ pub struct Config {
     pub rustc_wrapper: String,
     pub craft_fonts_cache: PathBuf,
     pub sccache_dir: PathBuf,
-    /// Owner of the listed repos (`org` in the config file).
+    /// Owner of the listed repos (`fork_owner` in the config file).
     pub fork_owner: String,
     /// Bare repo names in `fork_owner`.
     pub apps: Vec<String>,
@@ -41,7 +41,7 @@ pub struct Config {
 pub struct FileConfig {
     pub build_dir: Option<PathBuf>,
     pub clone_dir: Option<PathBuf>,
-    pub org: Option<String>,
+    pub fork_owner: Option<String>,
     #[serde(default)]
     pub apps: Vec<String>,
     #[serde(default)]
@@ -139,10 +139,9 @@ impl Config {
             force: opts.force,
             jobs: opts.jobs,
             only: opts.only.clone(),
-            dest_dir: opts
-                .dest_dir
+            dest_dir: file
+                .clone_dir
                 .clone()
-                .or_else(|| file.clone_dir.clone())
                 .unwrap_or_else(|| home.join("repos/craft-apps")),
             build_dir: file
                 .build_dir
@@ -152,7 +151,10 @@ impl Config {
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
             craft_fonts_cache: path_or("CRAFT_FONTS_CACHE", cache.join("craft-fonts")),
             sccache_dir: path_or("SCCACHE_DIR", sccache_base.join("sccache")),
-            fork_owner: file.org.clone().unwrap_or_else(|| "Zezura-Archive".into()),
+            fork_owner: file
+                .fork_owner
+                .clone()
+                .unwrap_or_else(|| "Zezura-Archive".into()),
             apps: file.apps.clone(),
             libraries: file.libraries.clone(),
             config_path: file.path.clone(),
@@ -266,26 +268,24 @@ mod tests {
     fn config_file_rejects_unknown_keys() {
         let dir = scratch_dir("unknown");
         let path = dir.join("config.toml");
-        std::fs::write(&path, "dest_dir = \"/x\"\n").unwrap();
-        assert!(FileConfig::load(Some(&path), Path::new("/h"), |_| None).is_err());
+        for key in ["dest_dir", "org"] {
+            std::fs::write(&path, format!("{key} = \"/x\"\n")).unwrap();
+            assert!(FileConfig::load(Some(&path), Path::new("/h"), |_| None).is_err());
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn command_line_overrides_config_file_and_env_does_not() {
+    fn config_file_sets_dirs_and_env_does_not() {
         let file = FileConfig {
             build_dir: Some("/f/build".into()),
             clone_dir: Some("/f/clone".into()),
             ..FileConfig::default()
         };
-        let opts = Options {
-            dest_dir: Some("/cli".into()),
-            ..Options::default()
-        };
-        let c = Config::from_lookup(&opts, &file, Path::new("/h"), |k| {
+        let c = Config::from_lookup(&Options::default(), &file, Path::new("/h"), |k| {
             matches!(k, "BUILD_DIR" | "FORK_OWNER").then(|| "/env".to_owned())
         });
-        assert_eq!(c.dest_dir, Path::new("/cli"));
+        assert_eq!(c.dest_dir, Path::new("/f/clone"));
         assert_eq!(c.build_dir, Path::new("/f/build"));
         assert_eq!(c.fork_owner, "Zezura-Archive");
     }
@@ -318,10 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn config_file_sets_org_apps_and_libraries() {
+    fn config_file_sets_fork_owner_apps_and_libraries() {
         let file = load_text(
             "repos",
-            "org = \"Acme\"\napps = [\"filmcraft\", \"effectcraft\"]\nlibraries = [\"egui\"]\n",
+            "fork_owner = \"Acme\"\napps = [\"filmcraft\", \"effectcraft\"]\nlibraries = [\"egui\"]\n",
         )
         .unwrap();
         let c = config_with(&file, &[]);
