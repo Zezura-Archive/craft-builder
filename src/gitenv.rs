@@ -168,7 +168,12 @@ mod tests {
     }
 
     fn base_gh(inherited: usize, gh: bool) -> GitEnv {
-        let cfg = Config::from_lookup(&Options::default(), Path::new("/home/u"), |_| None);
+        let cfg = Config::from_lookup(
+            &Options::default(),
+            &Default::default(),
+            Path::new("/home/u"),
+            |_| None,
+        );
         GitEnv::with_inherited_count(&cfg, "tok", inherited, gh)
     }
 

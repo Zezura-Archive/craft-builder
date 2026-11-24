@@ -21,6 +21,8 @@ pub struct Options {
     pub jobs: usize,
     /// `DEST_DIR`; `None` when absent or empty (the default then applies).
     pub dest_dir: Option<PathBuf>,
+    /// `--config` file; `None` means the default location.
+    pub config: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -31,6 +33,7 @@ impl Default for Options {
             only: Vec::new(),
             jobs: 1,
             dest_dir: None,
+            config: None,
         }
     }
 }
@@ -66,6 +69,9 @@ struct Raw {
         allow_hyphen_values = true
     )]
     jobs: String,
+    /// Config file (default: ~/.config/craft-builder/config.toml).
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
     /// Where repos are cloned (default: ~/repos/craft-forks).
     #[arg(value_name = "DEST_DIR")]
     dest_dir: Option<String>,
@@ -115,7 +121,13 @@ impl Options {
             return Err(fail("--only needs at least one repo name.".into()));
         }
 
-        if mode == Mode::Clean && (raw.force || only_given || jobs != 1 || raw.dest_dir.is_some()) {
+        if mode == Mode::Clean
+            && (raw.force
+                || only_given
+                || jobs != 1
+                || raw.dest_dir.is_some()
+                || raw.config.is_some())
+        {
             return Err(fail("--clean takes no other options or arguments.".into()));
         }
 
@@ -125,6 +137,7 @@ impl Options {
             only,
             jobs,
             dest_dir: raw.dest_dir.filter(|d| !d.is_empty()).map(PathBuf::from),
+            config: raw.config,
         })
     }
 }
@@ -213,9 +226,23 @@ mod tests {
             &["--clean", "--only", "x"],
             &["--clean", "-j", "2"],
             &["--clean", "dest"],
+            &["--clean", "-c", "x.toml"],
         ] {
             assert!(msg(args).contains("--clean takes no other options or arguments."));
         }
+    }
+
+    #[test]
+    fn config_short_and_long() {
+        assert!(parse(&[]).unwrap().config.is_none());
+        assert_eq!(
+            parse(&["-c", "a.toml"]).unwrap().config,
+            Some("a.toml".into())
+        );
+        assert_eq!(
+            parse(&["--config=b.toml"]).unwrap().config,
+            Some("b.toml".into())
+        );
     }
 
     #[test]

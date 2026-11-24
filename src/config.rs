@@ -1,7 +1,8 @@
-//! Environment variables and defaults (spec §1, §2.2).
+//! Config file, environment variables and defaults (spec §1, §2.2).
 
 use crate::cli::{Mode, Options};
 use anyhow::{Context, Result, anyhow};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 pub const CRAFT_FONTS_REPO: &str = "storytold/craft-fonts";
@@ -28,17 +29,73 @@ pub struct Config {
     pub fork_owner: String,
 }
 
+/// `config.toml`: directories that override the defaults.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileConfig {
+    pub build_dir: Option<PathBuf>,
+    pub clone_dir: Option<PathBuf>,
+}
+
+impl FileConfig {
+    /// Read `--config`, else `$XDG_CONFIG_HOME/craft-builder/config.toml` if it exists.
+    pub fn load(
+        explicit: Option<&Path>,
+        home: &Path,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self> {
+        let path = match explicit {
+            Some(path) => path.to_owned(),
+            None => {
+                let base = get("XDG_CONFIG_HOME")
+                    .filter(|v| !v.is_empty())
+                    .map_or_else(|| home.join(".config"), PathBuf::from);
+                let path = base.join("craft-builder/config.toml");
+                if !path.exists() {
+                    return Ok(Self::default());
+                }
+                path
+            }
+        };
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow!("cannot read config file {}: {e}", path.display()))?;
+        let file: Self = toml::from_str(&text)
+            .map_err(|e| anyhow!("invalid config file {}: {e}", path.display()))?;
+        let expand = |dir: Option<PathBuf>| dir.map(|d| expand_tilde(&d, home));
+        Ok(Self {
+            build_dir: expand(file.build_dir),
+            clone_dir: expand(file.clone_dir),
+        })
+    }
+}
+
+/// Replace a leading `~` with `home`.
+fn expand_tilde(path: &Path, home: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(rest) => home.join(rest),
+        Err(_) => path.to_owned(),
+    }
+}
+
 impl Config {
     pub fn from_env(opts: &Options) -> Result<Self> {
         let home = std::env::var_os("HOME")
             .filter(|h| !h.is_empty())
             .map(PathBuf::from)
             .ok_or_else(|| anyhow!("HOME is not set."))?;
-        Ok(Self::from_lookup(opts, &home, |k| std::env::var(k).ok()))
+        let get = |k: &str| std::env::var(k).ok();
+        let file = FileConfig::load(opts.config.as_deref(), &home, get)?;
+        Ok(Self::from_lookup(opts, &file, &home, get))
     }
 
-    /// Build from an env lookup (injectable for tests).
-    pub fn from_lookup(opts: &Options, home: &Path, get: impl Fn(&str) -> Option<String>) -> Self {
+    /// Build from a config file and an env lookup (injectable for tests).
+    /// Precedence: command line, then environment, then config file, then default.
+    pub fn from_lookup(
+        opts: &Options,
+        file: &FileConfig,
+        home: &Path,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Self {
         let nonempty = |key: &str| get(key).filter(|v| !v.is_empty());
         let path_or = |key: &str, default: PathBuf| nonempty(key).map_or(default, PathBuf::from);
         let cache = home.join(".cache/craft-forks");
@@ -55,8 +112,14 @@ impl Config {
             dest_dir: opts
                 .dest_dir
                 .clone()
+                .or_else(|| file.clone_dir.clone())
                 .unwrap_or_else(|| home.join("repos/craft-forks")),
-            build_dir: path_or("BUILD_DIR", home.join("builds/craft-forks")),
+            build_dir: path_or(
+                "BUILD_DIR",
+                file.build_dir
+                    .clone()
+                    .unwrap_or_else(|| home.join("builds/craft-forks")),
+            ),
             cargo_target_dir: path_or("CARGO_TARGET_DIR", cache.join("target")),
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
             craft_fonts_cache: path_or("CRAFT_FONTS_CACHE", cache.join("craft-fonts")),
@@ -95,13 +158,92 @@ mod tests {
     use std::collections::HashMap;
 
     fn config(env: &[(&str, &str)]) -> Config {
+        config_with(&FileConfig::default(), env)
+    }
+
+    fn config_with(file: &FileConfig, env: &[(&str, &str)]) -> Config {
         let env: HashMap<String, String> = env
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        Config::from_lookup(&Options::default(), Path::new("/home/u"), |k| {
+        Config::from_lookup(&Options::default(), file, Path::new("/home/u"), |k| {
             env.get(k).cloned()
         })
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("craft-builder-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn config_file_sets_dirs_and_expands_tilde() {
+        let dir = scratch_dir("cfg");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "build_dir = \"~/builds/craft-apps/\"\nclone_dir = \"/r/apps\"\n",
+        )
+        .unwrap();
+        let file = FileConfig::load(Some(&path), Path::new("/home/u"), |_| None).unwrap();
+        let c = config_with(&file, &[]);
+        assert_eq!(c.build_dir, Path::new("/home/u/builds/craft-apps"));
+        assert_eq!(c.dest_dir, Path::new("/r/apps"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn config_file_is_found_under_xdg_config_home() {
+        let dir = scratch_dir("xdg");
+        std::fs::create_dir_all(dir.join("craft-builder")).unwrap();
+        std::fs::write(
+            dir.join("craft-builder/config.toml"),
+            "clone_dir = \"/r\"\n",
+        )
+        .unwrap();
+        let xdg = dir.to_str().unwrap().to_owned();
+        let file = FileConfig::load(None, Path::new("/home/u"), |k| {
+            (k == "XDG_CONFIG_HOME").then(|| xdg.clone())
+        })
+        .unwrap();
+        assert_eq!(file.clone_dir.as_deref(), Some(Path::new("/r")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_default_config_is_fine_missing_explicit_is_an_error() {
+        let home = Path::new("/nonexistent-home");
+        let file = FileConfig::load(None, home, |_| None).unwrap();
+        assert!(file.build_dir.is_none() && file.clone_dir.is_none());
+        assert!(FileConfig::load(Some(&home.join("c.toml")), home, |_| None).is_err());
+    }
+
+    #[test]
+    fn config_file_rejects_unknown_keys() {
+        let dir = scratch_dir("unknown");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "dest_dir = \"/x\"\n").unwrap();
+        assert!(FileConfig::load(Some(&path), Path::new("/h"), |_| None).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn command_line_and_env_override_config_file() {
+        let file = FileConfig {
+            build_dir: Some("/f/build".into()),
+            clone_dir: Some("/f/clone".into()),
+        };
+        let opts = Options {
+            dest_dir: Some("/cli".into()),
+            ..Options::default()
+        };
+        let c = Config::from_lookup(&opts, &file, Path::new("/h"), |k| {
+            (k == "BUILD_DIR").then(|| "/env".to_owned())
+        });
+        assert_eq!(c.dest_dir, Path::new("/cli"));
+        assert_eq!(c.build_dir, Path::new("/env"));
     }
 
     #[test]

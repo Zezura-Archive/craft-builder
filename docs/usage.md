@@ -34,7 +34,8 @@ At most one of `--sync`, `--build`, `--release` and `--clean` may be given.
 
 | Option | Description |
 | --- | --- |
-| `DEST_DIR` | Where repos are cloned. Default `~/repos/craft-forks`; created if missing. |
+| `DEST_DIR` | Where repos are cloned. Overrides `clone_dir` from the [config file](#config-file). Default `~/repos/craft-forks`; created if missing. |
+| `-c`, `--config FILE` | Read this [config file](#config-file) instead of the default one. It must exist. |
 | `--sync` | Sync only (phase 1). |
 | `--build` | Sync, then build (phases 1-2). No releases. |
 | `--release` | Sync, build, then release (phases 1-3). The default. |
@@ -46,6 +47,17 @@ At most one of `--sync`, `--build`, `--release` and `--clean` may be given.
 
 Unselected repos (`--only`) aren't synced, built or released, but their existing clones and forks still serve the selected repos' git dependencies and craft-fonts.
 
+## Config file
+
+`$XDG_CONFIG_HOME/craft-builder/config.toml`, else `~/.config/craft-builder/config.toml`, or the file given with `--config`. It's optional, and every key is optional:
+
+```toml
+build_dir = "~/builds/craft-apps/"   # like BUILD_DIR
+clone_dir = "~/repos/craft-apps/"    # like DEST_DIR
+```
+
+A leading `~` means your home directory. Unknown keys are an error. `DEST_DIR` and `BUILD_DIR` override the file.
+
 ## Environment variables
 
 Empty values count as unset, except where noted.
@@ -55,11 +67,12 @@ Empty values count as unset, except where noted.
 | `STAR_LIST` | `zezura-archive-craft` | Star list of apps (exact match). |
 | `LIBS_STAR_LIST` | `zezura-archive-craft-libs` | Star list of libraries (exact match). A missing list is an error. Set it empty to read only `STAR_LIST`. |
 | `FORK_OWNER` | `Zezura-Archive` | User or org that owns the forks. Only its repos are released. Case-insensitive. |
-| `BUILD_DIR` | `~/builds/craft-forks` | Where binaries go, in `<name>/`. |
+| `BUILD_DIR` | `build_dir` from the [config file](#config-file), else `~/builds/craft-forks` | Where binaries go, in `<name>/`. |
 | `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos. |
 | `RUSTC_WRAPPER` | `sccache` | Compiler wrapper. Set it empty for none. |
 | `SCCACHE_DIR` | `$XDG_CACHE_HOME/sccache`, else `~/.cache/sccache` | sccache cache. Also what `--clean` removes. |
 | `CRAFT_FONTS_CACHE` | `~/.cache/craft-forks/craft-fonts` | craft-fonts checkout used by font-embedding builds. |
+| `XDG_CONFIG_HOME` | `~/.config` | Where the default [config file](#config-file) is looked for. |
 | `HOME` | none | Required. |
 
 The token variables are listed under [Token](#token).
