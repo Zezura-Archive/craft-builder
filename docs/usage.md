@@ -81,7 +81,7 @@ The token variables are listed under [Token](#token).
 
 ## Phases
 
-Repos from both star lists are processed in each phase before the next starts, libraries before apps.
+Repos from both star lists are processed libraries first, then apps. Sync finishes for all repos before builds start; each app's release overlaps the next repo's build (see Release).
 
 1. **Sync**, per repo:
    - For a fork, fast-forward its default branch on GitHub from its parent.
@@ -99,7 +99,7 @@ Repos from both star lists are processed in each phase before the next starts, l
    - Repos with libraries but no such binary (craft-libs, craft-fonts, egui) get their workspace libraries compiled for both targets and are not released.
    - Repos with neither are only synced.
    - sccache hit/miss stats are printed at the end of the run.
-3. **Release**, per built app:
+3. **Release**, per built app. Each app is released as soon as it's built, one release at a time, while the next repo builds. Release output is printed between builds, never in the middle of one:
    - Only repos owned by `FORK_OWNER` and built for both targets are released.
    - The release tag is `v<version>-forked`, from the binary's version in `cargo metadata`, targeting the built commit.
    - An existing release for that tag is updated in place: its tag is moved to the built commit, and assets and notes are replaced. If the tag already points at the built commit, nothing is done.

@@ -11,7 +11,7 @@ use craft_builder::{clean, sync, token, tools};
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -72,7 +72,7 @@ async fn run() -> Result<ExitCode> {
     let synced = sync_phase(&ctx, &items, &mut failures).await;
 
     let mut env = GitEnv::new(&ctx.cfg, &ctx.token);
-    let built = if ctx.cfg.build {
+    if ctx.cfg.build {
         build_phase(
             &ctx,
             &mut env,
@@ -81,11 +81,7 @@ async fn run() -> Result<ExitCode> {
             &synced,
             &mut failures,
         )
-    } else {
-        Vec::new()
-    };
-    if ctx.cfg.release {
-        release_phase(&ctx, &env, &built, &mut failures).await;
+        .await;
     }
 
     Ok(report::summary(&ctx.cfg, items.len(), &failures))
@@ -142,16 +138,21 @@ async fn sync_phase(ctx: &Arc<Ctx>, items: &[RepoItem], failures: &mut Failures)
     synced
 }
 
+/// Buffered output and success of one release, keyed by the repo's index in the synced list.
+type ReleaseDone = (usize, String, bool);
+
 /// Phase 2: git rewrites over all repos, then build each synced repo serially.
-/// Returns the fully built binary repos.
-fn build_phase(
-    ctx: &Ctx,
+/// With release enabled, each built app owned by FORK_OWNER is released in the
+/// background (one release at a time) while the next repo builds. Release output
+/// is printed between builds, never during one.
+async fn build_phase(
+    ctx: &Arc<Ctx>,
     env: &mut GitEnv,
     all_items: &[RepoItem],
     selected: usize,
     synced: &[RepoItem],
     failures: &mut Failures,
-) -> Vec<RepoItem> {
+) {
     let mut log = Log::live();
     if !synced.is_empty() {
         log.out("");
@@ -162,23 +163,29 @@ fn build_phase(
     }
     let mut sources = deps::setup_rewrites(all_items, &ctx.cfg.dest_dir, env, &mut log);
 
-    let mut built = Vec::new();
-    for item in synced {
+    let release_env = env.clone();
+    let one_at_a_time = Arc::new(Semaphore::new(1));
+    let mut releases = JoinSet::new();
+    let mut released: Vec<Option<bool>> = vec![None; synced.len()];
+    for (i, item) in synced.iter().enumerate() {
+        print_finished_releases(&mut releases, &mut released);
         log.header(format_args!("build {}", item.repo));
-        let outcome = build::build_repo(&ctx.cfg, env, &mut sources, item, &mut log);
+        let outcome = tokio::task::block_in_place(|| {
+            build::build_repo(&ctx.cfg, env, &mut sources, item, &mut log)
+        });
         failures.extend(outcome.failures);
-        if outcome.releasable {
-            built.push(item.clone());
+        if !ctx.cfg.release || !outcome.releasable {
+            continue;
         }
-    }
-    built
-}
-
-/// Phase 3: release the built repos owned by FORK_OWNER.
-async fn release_phase(ctx: &Ctx, env: &GitEnv, built: &[RepoItem], failures: &mut Failures) {
-    let mut log = Log::live();
-    for item in built {
-        if !item.is_owned_by(&ctx.cfg.fork_owner) {
+        if item.is_owned_by(&ctx.cfg.fork_owner) {
+            released[i] = Some(false);
+            releases.spawn(release_task(
+                (i, item.clone()),
+                Arc::clone(ctx),
+                release_env.clone(),
+                Arc::clone(&one_at_a_time),
+            ));
+        } else {
             log.out("");
             log.out(format!(
                 "Not releasing {}: owned by {}, not {}.",
@@ -186,13 +193,54 @@ async fn release_phase(ctx: &Ctx, env: &GitEnv, built: &[RepoItem], failures: &m
                 item.owner(),
                 ctx.cfg.fork_owner
             ));
-            continue;
         }
-        log.header(format_args!("release {}", item.repo));
-        if let Err(err) = release::release_repo(ctx, env, item, &mut log).await {
-            log.err(format!("Error: {err:#}"));
-            log.err(format!("WARNING: failed to release {}", item.repo));
+    }
+
+    while let Some(joined) = releases.join_next().await {
+        record_release(joined, &mut released);
+    }
+    for (item, state) in synced.iter().zip(released) {
+        if state == Some(false) {
             failures.push(format!("{} (release)", item.repo));
         }
     }
+}
+
+/// Prints the output of releases that have already finished.
+fn print_finished_releases(releases: &mut JoinSet<ReleaseDone>, released: &mut [Option<bool>]) {
+    while let Some(joined) = releases.try_join_next() {
+        record_release(joined, released);
+    }
+}
+
+/// Prints a finished release's output and stores its success; a panicked task stays failed.
+fn record_release(joined: Result<ReleaseDone, JoinError>, released: &mut [Option<bool>]) {
+    if let Ok((i, block, ok)) = joined {
+        report::print_block(&block);
+        released[i] = Some(ok);
+    }
+}
+
+/// Releases one built repo once no other release is running, buffering its output.
+async fn release_task(
+    (i, item): (usize, RepoItem),
+    ctx: Arc<Ctx>,
+    env: GitEnv,
+    one_at_a_time: Arc<Semaphore>,
+) -> ReleaseDone {
+    let _permit = one_at_a_time
+        .acquire_owned()
+        .await
+        .expect("semaphore is never closed");
+    let mut log = Log::buffered();
+    log.header(format_args!("release {}", item.repo));
+    let ok = match release::release_repo(&ctx, &env, &item, &mut log).await {
+        Ok(()) => true,
+        Err(err) => {
+            log.err(format!("Error: {err:#}"));
+            log.err(format!("WARNING: failed to release {}", item.repo));
+            false
+        }
+    };
+    (i, log.into_buffer(), ok)
 }
