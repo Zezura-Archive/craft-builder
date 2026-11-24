@@ -190,6 +190,7 @@ mod tests {
         .unwrap();
         let cfg = crate::config::Config::from_lookup(
             &crate::cli::Options::default(),
+            &Default::default(),
             Path::new("/home/u"),
             |_| None,
         );

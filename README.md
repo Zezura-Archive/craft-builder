@@ -26,7 +26,7 @@ or install the built package from `./result/bin/craft-builder`. Both wrap the bi
 nix run . -- [options] [DEST_DIR]
 ```
 
-It needs a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login`). Options, environment variables, phases and access requirements are in [docs/usage.md](docs/usage.md).
+It needs a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth login`). Options, the config file, environment variables, phases and access requirements are in [docs/usage.md](docs/usage.md).
 
 ## Development
 
