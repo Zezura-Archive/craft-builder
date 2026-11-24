@@ -23,7 +23,10 @@ pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Option<String> {
 }
 
 fn from_gh_cli() -> Option<String> {
-    let out = Command::new("gh").args(["auth", "token"]).output().ok()?;
+    let out = Command::new("gh")
+        .args(["auth", "token", "--hostname", "github.com"])
+        .output()
+        .ok()?;
     let token = String::from_utf8(out.stdout).ok()?.trim().to_owned();
     (out.status.success() && !token.is_empty()).then_some(token)
 }
