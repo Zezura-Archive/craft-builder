@@ -1,7 +1,16 @@
-//! A starred repo and the `--only` matcher (spec §3.3, §3.4).
+//! A configured repo, name validation and the `--only` matcher (spec §3.3, §3.4).
 
 use anyhow::{Result, bail};
+use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Whether a repo is built and released (app) or only synced for its dependents (library).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepoKind {
+    App,
+    Library,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoItem {
@@ -16,6 +25,7 @@ pub struct RepoItem {
     pub branch: String,
     /// Parent `nameWithOwner`, or empty.
     pub parent: String,
+    pub kind: RepoKind,
 }
 
 impl RepoItem {
@@ -64,6 +74,42 @@ impl RepoItem {
     }
 }
 
+/// A single path segment of a name: plain characters, not `.` or `..`.
+fn is_plain_segment(s: &str) -> bool {
+    static SEGMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.-]+$").unwrap());
+    SEGMENT.is_match(s) && s != "." && s != ".."
+}
+
+/// Names end up in paths, URLs and git config keys, so only plain ones pass.
+pub fn validate_name(name: &str) -> Result<(), String> {
+    if is_plain_segment(name) {
+        Ok(())
+    } else {
+        Err("unsafe repository name".into())
+    }
+}
+
+/// Check a repo's `owner/name`, its parent and its branch with the same rule.
+pub fn validate(item: &RepoItem) -> Result<(), String> {
+    let plain = |s: &str| {
+        s.split_once('/')
+            .is_some_and(|(owner, name)| is_plain_segment(owner) && is_plain_segment(name))
+    };
+    if !plain(&item.repo) {
+        return Err("unsafe repository name".into());
+    }
+    if !item.parent.is_empty() && !plain(&item.parent) {
+        return Err(format!("unsafe parent name '{}'", item.parent));
+    }
+    if item
+        .branch
+        .contains(|c: char| matches!(c, '#' | '?' | '%') || c.is_whitespace())
+    {
+        return Err(format!("unsafe branch name '{}'", item.branch));
+    }
+    Ok(())
+}
+
 /// Fail if two items would share a `dest_dir/<name>`.
 pub fn ensure_unique_names(items: &[RepoItem]) -> Result<()> {
     let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
@@ -79,8 +125,9 @@ pub fn ensure_unique_names(items: &[RepoItem]) -> Result<()> {
     Ok(())
 }
 
-/// Narrow `all` to the repos matching any wanted name; every name must match something.
+/// Narrow the apps to those matching any wanted name; every name must match an app.
 pub fn select_only(all: &[RepoItem], wanted: &[String]) -> Result<Vec<RepoItem>> {
+    let all: Vec<&RepoItem> = all.iter().filter(|i| i.kind == RepoKind::App).collect();
     let unmatched: Vec<&str> = wanted
         .iter()
         .filter(|w| !all.iter().any(|item| item.matches(w)))
@@ -89,14 +136,14 @@ pub fn select_only(all: &[RepoItem], wanted: &[String]) -> Result<Vec<RepoItem>>
     if !unmatched.is_empty() {
         let listing: String = all.iter().map(|i| format!("\n  {}", i.repo)).collect();
         bail!(
-            "--only matched nothing in the star lists for: {}\nRepos in the lists:{listing}",
+            "--only matched no app for: {}\nApps in the config:{listing}",
             unmatched.join(" ")
         );
     }
     Ok(all
-        .iter()
+        .into_iter()
         .filter(|item| wanted.iter().any(|w| item.matches(w)))
-        .cloned()
+        .map(|item| (*item).clone())
         .collect())
 }
 
@@ -112,6 +159,14 @@ mod tests {
             permission: "ADMIN".into(),
             branch: "main".into(),
             parent: parent.into(),
+            kind: RepoKind::App,
+        }
+    }
+
+    fn library(repo: &str) -> RepoItem {
+        RepoItem {
+            kind: RepoKind::Library,
+            ..item(repo, "")
         }
     }
 
@@ -147,6 +202,23 @@ mod tests {
     }
 
     #[test]
+    fn only_selects_apps_not_libraries() {
+        let all = [item("Me/app", ""), library("Me/lib")];
+        assert!(select_only(&all, &wanted(&["lib"])).is_err());
+        let selected = select_only(&all, &wanted(&["app"])).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].kind, RepoKind::App);
+    }
+
+    #[test]
+    fn names_must_be_plain() {
+        assert!(validate_name("egui").is_ok() && validate_name("a.b-c_d").is_ok());
+        for bad in ["", ".", "..", "a/b", "a b"] {
+            assert!(validate_name(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn unmatched_names_are_listed_with_all_repos() {
         let all = [item("Me/lib", "")];
         let err = select_only(&all, &wanted(&["lib", "x", "y"]))
@@ -154,7 +226,7 @@ mod tests {
             .to_string();
         assert_eq!(
             err,
-            "--only matched nothing in the star lists for: x y\nRepos in the lists:\n  Me/lib"
+            "--only matched no app for: x y\nApps in the config:\n  Me/lib"
         );
     }
 

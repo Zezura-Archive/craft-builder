@@ -20,7 +20,7 @@ pub struct Sources {
     pub reported: HashSet<String>,
 }
 
-/// Add the `insteadOf` rewrites to `env` over ALL star-list repos (spec §6.2) and print the notes.
+/// Add the `insteadOf` rewrites to `env` over ALL configured apps and libraries (spec §6.2) and print the notes.
 ///
 /// A clone in `dest_dir` gets `file://` rewrites for the `.git` and plain URLs of its
 /// upstream; a fork without a clone gets one rewrite to the fork.
@@ -96,7 +96,7 @@ pub fn prepare_git_deps(
         } else if !sources.fork.contains_key(&upstream) && sources.reported.insert(upstream.clone())
         {
             log.out(format!(
-                "NOTE: no copy of {upstream} in the star lists; fetching it from upstream."
+                "NOTE: no copy of {upstream} in the config's libraries; fetching it from upstream."
             ));
         }
     }
@@ -196,7 +196,7 @@ mod tests {
         prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
         assert_eq!(
             log.into_buffer(),
-            "NOTE: no copy of o/r in the star lists; fetching it from upstream.\n"
+            "NOTE: no copy of o/r in the config's libraries; fetching it from upstream.\n"
         );
     }
 

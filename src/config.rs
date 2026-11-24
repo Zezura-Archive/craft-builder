@@ -1,8 +1,10 @@
 //! Config file, environment variables and defaults (spec §1, §2.2).
 
 use crate::cli::{Mode, Options};
-use anyhow::{Context, Result, anyhow};
+use crate::repo::validate_name;
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub const CRAFT_FONTS_REPO: &str = "storytold/craft-fonts";
@@ -23,18 +25,30 @@ pub struct Config {
     pub rustc_wrapper: String,
     pub craft_fonts_cache: PathBuf,
     pub sccache_dir: PathBuf,
-    pub star_list: String,
-    /// Empty means read no libraries list.
-    pub libs_star_list: String,
+    /// Owner of the listed repos (`org` in the config file, `FORK_OWNER` overrides).
     pub fork_owner: String,
+    /// Bare repo names in `fork_owner`.
+    pub apps: Vec<String>,
+    /// Bare repo names in `fork_owner`; synced before apps, never built.
+    pub libraries: Vec<String>,
+    /// The config file that was read, if any.
+    pub config_path: Option<PathBuf>,
 }
 
-/// `config.toml`: directories that override the defaults.
+/// `config.toml`: the repos to process and directories that override the defaults.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileConfig {
     pub build_dir: Option<PathBuf>,
     pub clone_dir: Option<PathBuf>,
+    pub org: Option<String>,
+    #[serde(default)]
+    pub apps: Vec<String>,
+    #[serde(default)]
+    pub libraries: Vec<String>,
+    /// Where this was read from; not a key.
+    #[serde(skip)]
+    pub path: Option<PathBuf>,
 }
 
 impl FileConfig {
@@ -62,10 +76,26 @@ impl FileConfig {
         let file: Self = toml::from_str(&text)
             .map_err(|e| anyhow!("invalid config file {}: {e}", path.display()))?;
         let expand = |dir: Option<PathBuf>| dir.map(|d| expand_tilde(&d, home));
+        file.validate_repos()
+            .map_err(|e| anyhow!("invalid config file {}: {e}", path.display()))?;
         Ok(Self {
             build_dir: expand(file.build_dir),
             clone_dir: expand(file.clone_dir),
+            path: Some(path),
+            ..file
         })
+    }
+
+    /// Names must be plain, and appear once across `apps` and `libraries`.
+    fn validate_repos(&self) -> Result<()> {
+        let mut seen = HashSet::new();
+        for name in self.libraries.iter().chain(&self.apps) {
+            validate_name(name).map_err(|reason| anyhow!("'{name}': {reason}"))?;
+            if !seen.insert(name.to_lowercase()) {
+                bail!("'{name}' is listed more than once in apps and libraries");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -124,11 +154,27 @@ impl Config {
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
             craft_fonts_cache: path_or("CRAFT_FONTS_CACHE", cache.join("craft-fonts")),
             sccache_dir: path_or("SCCACHE_DIR", sccache_base.join("sccache")),
-            star_list: nonempty("STAR_LIST").unwrap_or_else(|| "zezura-archive-craft".into()),
-            libs_star_list: get("LIBS_STAR_LIST")
-                .unwrap_or_else(|| "zezura-archive-craft-libs".into()),
-            fork_owner: nonempty("FORK_OWNER").unwrap_or_else(|| "Zezura-Archive".into()),
+            fork_owner: nonempty("FORK_OWNER")
+                .or_else(|| file.org.clone())
+                .unwrap_or_else(|| "Zezura-Archive".into()),
+            apps: file.apps.clone(),
+            libraries: file.libraries.clone(),
+            config_path: file.path.clone(),
         }
+    }
+
+    /// Fail unless the config lists at least one app or library.
+    pub fn ensure_repos_listed(&self) -> Result<()> {
+        if !self.apps.is_empty() || !self.libraries.is_empty() {
+            return Ok(());
+        }
+        let place = match &self.config_path {
+            Some(path) => format!("The config file {} lists none", path.display()),
+            None => "No config file was found (see --config)".to_owned(),
+        };
+        bail!(
+            "{place}. Add `apps = [\"name\"]` and/or `libraries = [\"name\"]` (repo names in the org)."
+        );
     }
 
     /// Create, canonicalise and check the writable directories (spec §2.2).
@@ -234,6 +280,7 @@ mod tests {
         let file = FileConfig {
             build_dir: Some("/f/build".into()),
             clone_dir: Some("/f/clone".into()),
+            ..FileConfig::default()
         };
         let opts = Options {
             dest_dir: Some("/cli".into()),
@@ -249,8 +296,6 @@ mod tests {
     #[test]
     fn defaults() {
         let c = config(&[]);
-        assert_eq!(c.star_list, "zezura-archive-craft");
-        assert_eq!(c.libs_star_list, "zezura-archive-craft-libs");
         assert_eq!(c.fork_owner, "Zezura-Archive");
         assert_eq!(c.dest_dir, Path::new("/home/u/repos/craft-apps"));
         assert_eq!(c.build_dir, Path::new("/home/u/builds/craft-apps"));
@@ -266,19 +311,80 @@ mod tests {
         assert!(c.build && c.release);
     }
 
-    #[test]
-    fn libs_star_list_empty_means_none_unset_means_default() {
-        assert_eq!(config(&[("LIBS_STAR_LIST", "")]).libs_star_list, "");
-        assert_eq!(config(&[]).libs_star_list, "zezura-archive-craft-libs");
+    fn load_text(name: &str, text: &str) -> Result<FileConfig> {
+        let dir = scratch_dir(name);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let file = FileConfig::load(Some(&path), Path::new("/h"), |_| None);
+        std::fs::remove_dir_all(dir).unwrap();
+        file
     }
 
     #[test]
-    fn star_list_empty_means_default() {
+    fn config_file_sets_org_apps_and_libraries() {
+        let file = load_text(
+            "repos",
+            "org = \"Acme\"\napps = [\"filmcraft\", \"effectcraft\"]\nlibraries = [\"egui\"]\n",
+        )
+        .unwrap();
+        let c = config_with(&file, &[]);
+        assert_eq!(c.fork_owner, "Acme");
+        assert_eq!(c.apps, ["filmcraft", "effectcraft"]);
+        assert_eq!(c.libraries, ["egui"]);
+        assert!(c.config_path.is_some());
+        assert!(c.ensure_repos_listed().is_ok());
+    }
+
+    #[test]
+    fn fork_owner_env_overrides_org() {
+        let file = FileConfig {
+            org: Some("Acme".into()),
+            ..FileConfig::default()
+        };
+        assert_eq!(config_with(&file, &[]).fork_owner, "Acme");
         assert_eq!(
-            config(&[("STAR_LIST", "")]).star_list,
-            "zezura-archive-craft"
+            config_with(&file, &[("FORK_OWNER", "Other")]).fork_owner,
+            "Other"
         );
-        assert_eq!(config(&[("STAR_LIST", "mine")]).star_list, "mine");
+        assert_eq!(config_with(&file, &[("FORK_OWNER", "")]).fork_owner, "Acme");
+    }
+
+    #[test]
+    fn duplicate_or_overlapping_names_are_errors() {
+        let err = load_text("dup", "apps = [\"a\", \"a\"]\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'a' is listed more than once"), "{err}");
+        assert!(load_text("overlap", "apps = [\"a\"]\nlibraries = [\"A\"]\n").is_err());
+    }
+
+    #[test]
+    fn unsafe_names_are_errors() {
+        for bad in ["o/a", "..", "a b", ""] {
+            assert!(
+                load_text("unsafe", &format!("apps = [\"{bad}\"]\n")).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_lists_error_names_the_file_or_its_absence() {
+        let none = config(&[]);
+        let err = none.ensure_repos_listed().unwrap_err().to_string();
+        assert!(err.starts_with("No config file was found"), "{err}");
+        let file = FileConfig {
+            path: Some("/c/config.toml".into()),
+            ..FileConfig::default()
+        };
+        let err = config_with(&file, &[])
+            .ensure_repos_listed()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("/c/config.toml") && err.contains("apps"),
+            "{err}"
+        );
     }
 
     #[test]

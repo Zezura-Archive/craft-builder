@@ -122,7 +122,7 @@ pub fn check_fork_write_access(
     }
     if !lacking.is_empty() {
         bail!(
-            "{gh_user} lacks write access to these forks (permission in brackets):{}\nGrant {gh_user} write access to them (or move them into {fork_owner}), or drop them from the star lists.",
+            "{gh_user} lacks write access to these forks (permission in brackets):{}\nGrant {gh_user} write access to them (or move them into {fork_owner}), or drop them from the config.",
             lacking.concat()
         );
     }
@@ -132,6 +132,7 @@ pub fn check_fork_write_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::RepoKind;
 
     fn fork(repo: &str, permission: &str) -> RepoItem {
         RepoItem {
@@ -141,6 +142,7 @@ mod tests {
             permission: permission.into(),
             branch: "main".into(),
             parent: "Up/x".into(),
+            kind: RepoKind::App,
         }
     }
 
@@ -156,7 +158,7 @@ mod tests {
             .to_string();
         assert_eq!(
             err,
-            "me lacks write access to these forks (permission in brackets):\n  - O/b (READ)\n  - O/c (NONE)\nGrant me write access to them (or move them into O), or drop them from the star lists."
+            "me lacks write access to these forks (permission in brackets):\n  - O/b (READ)\n  - O/c (NONE)\nGrant me write access to them (or move them into O), or drop them from the config."
         );
         assert!(check_fork_write_access(&items[..1], "me", "O", true).is_ok());
     }

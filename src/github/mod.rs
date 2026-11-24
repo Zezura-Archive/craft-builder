@@ -3,7 +3,7 @@
 pub mod access;
 pub mod fork;
 pub mod release;
-pub mod stars;
+pub mod repos;
 
 use anyhow::Result;
 use octocrab::Octocrab;

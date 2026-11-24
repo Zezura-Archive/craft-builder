@@ -4,8 +4,8 @@ use craft_builder::cli::{Mode, Options};
 use craft_builder::config::Config;
 use craft_builder::context::Ctx;
 use craft_builder::gitenv::GitEnv;
-use craft_builder::github::{self, access, release, stars};
-use craft_builder::repo::{self, RepoItem};
+use craft_builder::github::{self, access, release, repos};
+use craft_builder::repo::{self, RepoItem, RepoKind};
 use craft_builder::report::{self, Failures, Log};
 use craft_builder::{clean, sync, token, tools};
 use std::process::ExitCode;
@@ -35,20 +35,23 @@ async fn run() -> Result<ExitCode> {
         });
     }
 
+    cfg.ensure_repos_listed()?;
     tools::require_commands(&cfg)?;
     let token = token::resolve()?;
     let gh = github::client(&token)?;
     let gh_user = access::check_access(&gh, &cfg.fork_owner).await?;
     cfg.prepare_dirs()?;
 
-    let all_items = stars::read_star_lists(&gh, &cfg).await?;
-    let items = if cfg.only.is_empty() {
-        all_items.clone()
+    let all_items = repos::read_repos(&gh, &cfg).await?;
+    let libraries = of_kind(&all_items, RepoKind::Library);
+    let apps = if cfg.only.is_empty() {
+        of_kind(&all_items, RepoKind::App)
     } else {
         let selected = repo::select_only(&all_items, &cfg.only)?;
         println!("Selected {} of them with --only.", selected.len());
         selected
     };
+    let items = [libraries.clone(), apps.clone()].concat();
     repo::ensure_unique_names(&items)?;
     println!(
         "Syncing {} repo(s) into {}",
@@ -69,7 +72,8 @@ async fn run() -> Result<ExitCode> {
     });
     let mut failures = Failures::new();
 
-    let synced = sync_phase(&ctx, &items, &mut failures).await;
+    let mut synced = sync_phase(&ctx, &libraries, &mut failures).await;
+    synced.extend(sync_phase(&ctx, &apps, &mut failures).await);
 
     let mut env = GitEnv::new(&ctx.cfg, &ctx.token);
     let built = if ctx.cfg.build {
@@ -89,6 +93,10 @@ async fn run() -> Result<ExitCode> {
     }
 
     Ok(report::summary(&ctx.cfg, items.len(), &failures))
+}
+
+fn of_kind(items: &[RepoItem], kind: RepoKind) -> Vec<RepoItem> {
+    items.iter().filter(|i| i.kind == kind).cloned().collect()
 }
 
 /// Phase 1: sync every repo (`-j` at a time); returns the synced ones in list order.
@@ -142,7 +150,7 @@ async fn sync_phase(ctx: &Arc<Ctx>, items: &[RepoItem], failures: &mut Failures)
     synced
 }
 
-/// Phase 2: git rewrites over all repos, then build each synced repo serially.
+/// Phase 2: git rewrites over all repos, then build each synced app serially.
 /// Returns the fully built binary repos.
 fn build_phase(
     ctx: &Ctx,
@@ -163,7 +171,7 @@ fn build_phase(
     let mut sources = deps::setup_rewrites(all_items, &ctx.cfg.dest_dir, env, &mut log);
 
     let mut built = Vec::new();
-    for item in synced {
+    for item in synced.iter().filter(|i| i.kind == RepoKind::App) {
         log.header(format_args!("build {}", item.repo));
         let outcome = build::build_repo(&ctx.cfg, env, &mut sources, item, &mut log);
         failures.extend(outcome.failures);
@@ -177,7 +185,7 @@ fn build_phase(
 /// Phase 3: release the built repos owned by FORK_OWNER.
 async fn release_phase(ctx: &Ctx, env: &GitEnv, built: &[RepoItem], failures: &mut Failures) {
     let mut log = Log::live();
-    for item in built {
+    for item in built.iter().filter(|i| i.kind == RepoKind::App) {
         if !item.is_owned_by(&ctx.cfg.fork_owner) {
             log.out("");
             log.out(format!(
