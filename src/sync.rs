@@ -5,6 +5,7 @@ use crate::git;
 use crate::github::fork::sync_fork;
 use crate::repo::RepoItem;
 use crate::report::Log;
+use tokio::task::block_in_place;
 
 /// GitHub fork sync, clone if missing, then local fast-forward.
 ///
@@ -44,7 +45,7 @@ pub async fn sync_repo(ctx: &Ctx, item: &RepoItem, log: &mut Log) -> Result<(), 
 
     if !dest.exists() {
         log.out(format!("Cloning into {}...", dest.display()));
-        if let Err(err) = git::clone_repo(item, &dest, &ctx.token, log) {
+        if let Err(err) = block_in_place(|| git::clone_repo(item, &dest, &ctx.token, log)) {
             log.err(format!("Error: {err:#}"));
             log.err(format!("WARNING: failed to clone {repo}"));
             let _ = std::fs::remove_dir_all(&dest);
@@ -58,7 +59,9 @@ pub async fn sync_repo(ctx: &Ctx, item: &RepoItem, log: &mut Log) -> Result<(), 
         return Err(format!("{repo} (not a git repo: {})", dest.display()));
     }
 
-    if let Err(err) = git::update_local(&dest, branch, ctx.cfg.force, &ctx.token, log) {
+    if let Err(err) =
+        block_in_place(|| git::update_local(&dest, branch, ctx.cfg.force, &ctx.token, log))
+    {
         log.err(format!("Error: {err:#}"));
         log.err(format!(
             "WARNING: failed to update local {branch} in {}",
