@@ -3,7 +3,7 @@
 use crate::gitenv::GitEnv;
 use crate::repo::RepoItem;
 use crate::report::Log;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,8 +16,6 @@ pub struct Sources {
     pub local: HashMap<String, PathBuf>,
     /// Upstream `owner/name` to our fork, for forks without a clone.
     pub fork: HashMap<String, String>,
-    /// Upstreams already reported by the "no copy" note.
-    pub reported: HashSet<String>,
 }
 
 /// Add the `insteadOf` rewrites to `env` over ALL configured apps and libraries (spec §6.2) and print the notes.
@@ -63,9 +61,9 @@ pub fn setup_rewrites(
 /// No `Cargo.lock`: nothing. For each `source = "git+https://github.com/..#<40-hex>"` line
 /// (regex verbatim in the spec), once per upstream/sha: if `sources.local` has the upstream
 /// and `crate::git::has_commit` is false, queue the sha; else if no local or fork source and not
-/// in `sources.reported`, print the `NOTE: no copy of ...` line once. Per clone with
-/// missing shas: print `Fetching N pinned commit(s) into {dir}...`, then `crate::git::fetch_cli`.
-/// Never modifies `Cargo.lock`.
+/// collect it as unredirected. Any unredirected source (GitHub or not) is an error naming
+/// each one. Per clone with missing shas: print `Fetching N pinned commit(s) into {dir}...`,
+/// then `crate::git::fetch_cli`. Never modifies `Cargo.lock`.
 pub fn prepare_git_deps(
     sources: &mut Sources,
     dir: &Path,
@@ -80,6 +78,7 @@ pub fn prepare_git_deps(
         .with_context(|| format!("failed to read {}", lock.display()))?;
 
     let mut seen = HashSet::new();
+    let mut unredirected: Vec<String> = Vec::new();
     let mut missing: Vec<(PathBuf, Vec<String>)> = Vec::new();
     for (upstream, sha) in text.lines().filter_map(parse_git_source) {
         if !seen.insert((upstream.clone(), sha.clone())) {
@@ -93,13 +92,15 @@ pub fn prepare_git_deps(
                 Some((_, shas)) => shas.push(sha),
                 None => missing.push((clone.clone(), vec![sha])),
             }
-        } else if !sources.fork.contains_key(&upstream) && sources.reported.insert(upstream.clone())
-        {
-            log.out(format!(
-                "NOTE: no copy of {upstream} in the config's libraries; fetching it from upstream."
-            ));
+        } else if !sources.fork.contains_key(&upstream) && !unredirected.contains(&upstream) {
+            unredirected.push(upstream);
         }
     }
+    ensure!(
+        unredirected.is_empty(),
+        "git dependencies would come from upstream: {}; add each one's fork to `libraries` in the config.",
+        unredirected.join(", ")
+    );
 
     for (clone, shas) in missing {
         log.out(format!(
@@ -113,16 +114,20 @@ pub fn prepare_git_deps(
     Ok(())
 }
 
-/// `(upstream, sha)` of a Cargo.lock `source = "git+https://github.com/..#<sha>"` line.
+/// `(upstream, sha)` of a Cargo.lock `source = "git+<url>#<sha>"` line.
+///
+/// A GitHub URL gives `owner/name`; any other URL is returned whole.
 fn parse_git_source(line: &str) -> Option<(String, String)> {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r#"^source = "git\+https://github\.com/([^/?#]+/[^?#]+)(\?[^#]*)?#([0-9a-f]{40})"$"#,
-        )
-        .unwrap()
+        Regex::new(r#"^source = "git\+([^?#"]+)(\?[^#]*)?#([0-9a-f]{40})"$"#).unwrap()
     });
+    static GITHUB: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^https://github\.com/([^/]+/.+)$").unwrap());
     let caps = RE.captures(line)?;
-    let upstream = caps[1].strip_suffix(".git").unwrap_or(&caps[1]);
+    let url = caps[1].strip_suffix(".git").unwrap_or(&caps[1]);
+    let upstream = GITHUB
+        .captures(url)
+        .map_or(url, |c| c.get(1).unwrap().as_str());
     Some((upstream.to_owned(), caps[3].to_owned()))
 }
 
@@ -153,14 +158,21 @@ mod tests {
     fn ignores_other_lines() {
         for line in [
             r#"source = "registry+https://github.com/rust-lang/crates.io-index""#,
-            r#"source = "git+https://gitlab.com/o/r#0123456789abcdef0123456789abcdef01234567""#,
             r#"source = "git+https://github.com/o/r#0123""#,
-            r#"source = "git+https://github.com/o#0123456789abcdef0123456789abcdef01234567""#,
             r#" source = "git+https://github.com/o/r#0123456789abcdef0123456789abcdef01234567""#,
             "",
         ] {
             assert_eq!(parse(line), None, "{line}");
         }
+    }
+
+    #[test]
+    fn non_github_urls_are_kept_whole() {
+        let line = format!(r#"source = "git+https://gitlab.com/o/r.git?rev=x#{SHA}""#);
+        assert_eq!(
+            parse(&line),
+            Some(("https://gitlab.com/o/r".to_owned(), SHA.to_owned()))
+        );
     }
 
     fn env() -> GitEnv {
@@ -182,26 +194,31 @@ mod tests {
     }
 
     #[test]
-    fn missing_lock_is_fine_and_unknown_upstream_is_noted_once() {
+    fn missing_lock_is_fine_and_unredirected_sources_are_an_error() {
         let dir = temp_dir("lock");
         let mut sources = Sources::default();
         let mut log = Log::buffered();
         prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
         assert_eq!(log.into_buffer(), "");
 
-        let line = format!(r#"source = "git+https://github.com/o/r#{SHA}""#);
-        std::fs::write(dir.join("Cargo.lock"), format!("{line}\n{line}\n")).unwrap();
-        let mut log = Log::buffered();
-        prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
-        prepare_git_deps(&mut sources, &dir, &env(), &mut log).unwrap();
+        let github = format!(r#"source = "git+https://github.com/o/r#{SHA}""#);
+        let gitlab = format!(r#"source = "git+https://gitlab.com/o/x#{SHA}""#);
+        std::fs::write(
+            dir.join("Cargo.lock"),
+            format!("{github}\n{github}\n{gitlab}\n"),
+        )
+        .unwrap();
+        let err = prepare_git_deps(&mut sources, &dir, &env(), &mut Log::buffered())
+            .unwrap_err()
+            .to_string();
         assert_eq!(
-            log.into_buffer(),
-            "NOTE: no copy of o/r in the config's libraries; fetching it from upstream.\n"
+            err,
+            "git dependencies would come from upstream: o/r, https://gitlab.com/o/x; add each one's fork to `libraries` in the config."
         );
     }
 
     #[test]
-    fn fork_source_is_not_noted() {
+    fn fork_source_is_fine() {
         let dir = temp_dir("fork");
         let line = format!(r#"source = "git+https://github.com/o/r#{SHA}""#);
         std::fs::write(dir.join("Cargo.lock"), line).unwrap();

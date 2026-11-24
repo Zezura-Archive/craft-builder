@@ -80,7 +80,7 @@ pub fn build_repo(
         Ok(Some(git_ref)) => {
             if let Err(err) = fonts::prepare_craft_fonts(cfg, &env, &git_ref, log) {
                 log.err(format!("Error: {err:#}"));
-                log.err(format!("WARNING: failed to check out storytold/craft-fonts@{git_ref}; not building {repo}."));
+                log.err(format!("WARNING: failed to prepare storytold/craft-fonts@{git_ref}; not building {repo}."));
                 fail(&mut out, &format!("craft-fonts {git_ref}"));
                 return out;
             }
@@ -92,7 +92,7 @@ pub fn build_repo(
     if let Err(err) = deps::prepare_git_deps(sources, &dir, &env, log) {
         log.err(format!("Error: {err:#}"));
         log.err(format!(
-            "WARNING: failed to fetch the git dependency commits {repo} pins; not building it."
+            "WARNING: failed to prepare the git dependencies {repo} pins; not building it."
         ));
         fail(&mut out, "git dependencies");
         return out;

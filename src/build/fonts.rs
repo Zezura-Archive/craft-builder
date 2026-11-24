@@ -111,9 +111,9 @@ fn first_comment(s: &str) -> Option<usize> {
 
 /// Point `cfg.craft_fonts_cache` at `git_ref` of storytold/craft-fonts (spec §6.7).
 ///
-/// Recreate the cache when it is not a git checkout, or `dest_dir/craft-fonts` is a clone
-/// whose git common dir differs: a detached `git worktree add` of that clone (after
-/// `worktree prune`), else `git clone` of https://github.com/storytold/craft-fonts.git.
+/// Fails unless `dest_dir/craft-fonts` is a synced clone (a fork), so nothing comes from upstream.
+/// Recreate the cache when it is not a git checkout or its git common dir differs from that
+/// clone's: a detached `git worktree add` of the clone (after `worktree prune`).
 /// Fetch the ref from origin unless it is a local 40-hex commit (then use `FETCH_HEAD`'s
 /// sha), then `git -c advice.detachedHead=false checkout --quiet --force --detach`.
 /// Uses the git CLI through `env.apply`; prints the messages of §6.7 and
@@ -122,25 +122,20 @@ pub fn prepare_craft_fonts(cfg: &Config, env: &GitEnv, git_ref: &str, log: &mut 
     let dir = &cfg.craft_fonts_cache;
     let synced = cfg.dest_dir.join("craft-fonts");
 
-    let want_git = if synced.join(".git").is_dir() {
-        Some(git::git_common_dir(&synced).context("failed to find the git dir of craft-fonts")?)
-    } else {
-        None
-    };
+    ensure!(
+        synced.join(".git").is_dir(),
+        "craft-fonts would come from upstream {CRAFT_FONTS_REPO}; add its fork to `libraries` in the config."
+    );
+    let want_git =
+        git::git_common_dir(&synced).context("failed to find the git dir of craft-fonts")?;
     let have_git = dir
         .join(".git")
         .exists()
         .then(|| git::git_common_dir(dir))
         .flatten();
 
-    if have_git.is_none() || (want_git.is_some() && have_git != want_git) {
-        recreate(
-            cfg,
-            dir,
-            want_git.is_some().then_some(synced.as_path()),
-            env,
-            log,
-        )?;
+    if have_git != Some(want_git) {
+        recreate(cfg, dir, &synced, env, log)?;
     }
 
     let mut git_ref = git_ref.to_owned();
@@ -177,14 +172,8 @@ pub fn prepare_craft_fonts(cfg: &Config, env: &GitEnv, git_ref: &str, log: &mut 
     Ok(())
 }
 
-/// Replace `dir` with a detached worktree of `synced`, or else a fresh clone.
-fn recreate(
-    cfg: &Config,
-    dir: &Path,
-    synced: Option<&Path>,
-    env: &GitEnv,
-    log: &mut Log,
-) -> Result<()> {
+/// Replace `dir` with a detached worktree of the clone `synced`.
+fn recreate(cfg: &Config, dir: &Path, synced: &Path, env: &GitEnv, log: &mut Log) -> Result<()> {
     let keep = [&*cfg.dest_dir, &cfg.build_dir, &cfg.cargo_target_dir];
     ensure!(
         !clean::is_protected(dir, &cfg.home, &keep),
@@ -199,31 +188,19 @@ fn recreate(
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if let Some(synced) = synced {
-        log.out(format!(
-            "Adding a worktree of {} at {}...",
-            synced.display(),
-            dir.display()
-        ));
-        run_git(synced, &["worktree", "prune"], env, log)?;
-        let dir = dir.to_string_lossy();
-        run_git(
-            synced,
-            &["worktree", "add", "--quiet", "--detach", &dir],
-            env,
-            log,
-        )
-    } else {
-        log.out(format!(
-            "Cloning {CRAFT_FONTS_REPO} into {}...",
-            dir.display()
-        ));
-        let mut cmd = Command::new("git");
-        cmd.args(["clone", "--quiet"])
-            .arg(format!("https://github.com/{CRAFT_FONTS_REPO}.git"))
-            .arg(dir);
-        run(cmd, env, log)
-    }
+    log.out(format!(
+        "Adding a worktree of {} at {}...",
+        synced.display(),
+        dir.display()
+    ));
+    run_git(synced, &["worktree", "prune"], env, log)?;
+    let dir = dir.to_string_lossy();
+    run_git(
+        synced,
+        &["worktree", "add", "--quiet", "--detach", &dir],
+        env,
+        log,
+    )
 }
 
 /// `git -C dir args...`, output through `log`.
@@ -375,7 +352,14 @@ mod tests {
         let env = GitEnv::with_inherited_count(&cfg, "tok", 0, true);
         for cache in [cfg.home.clone(), cfg.dest_dir.clone(), "/".into()] {
             cfg_home.craft_fonts_cache = cache.clone();
-            let err = recreate(&cfg_home, &cache, None, &env, &mut Log::buffered()).unwrap_err();
+            let err = recreate(
+                &cfg_home,
+                &cache,
+                Path::new("/s"),
+                &env,
+                &mut Log::buffered(),
+            )
+            .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -384,5 +368,22 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn missing_synced_clone_is_an_error() {
+        let mut cfg = crate::config::Config::from_lookup(
+            &crate::cli::Options::default(),
+            &Default::default(),
+            Path::new("/home/u"),
+            |_| None,
+        );
+        cfg.dest_dir = "/nonexistent-clone-dir".into();
+        let env = GitEnv::with_inherited_count(&cfg, "tok", 0, true);
+        let err = prepare_craft_fonts(&cfg, &env, "main", &mut Log::buffered()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "craft-fonts would come from upstream storytold/craft-fonts; add its fork to `libraries` in the config."
+        );
     }
 }
