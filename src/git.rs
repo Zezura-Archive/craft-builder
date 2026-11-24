@@ -211,7 +211,7 @@ pub fn fetch_cli(dir: &Path, refs: &[&str], env: &GitEnv, log: &mut Log) -> Resu
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(dir)
-        .args(["fetch", "--quiet", "origin"])
+        .args(["fetch", "--quiet", "--", "origin"])
         .args(refs);
     env.apply(&mut cmd);
     let status = log.run(&mut cmd).context("failed to run git")?;
