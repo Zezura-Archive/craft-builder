@@ -68,7 +68,7 @@ Empty values count as unset, except where noted.
 | `LIBS_STAR_LIST` | `zezura-archive-craft-libs` | Star list of libraries (exact match). A missing list is an error. Set it empty to read only `STAR_LIST`. |
 | `FORK_OWNER` | `Zezura-Archive` | User or org that owns the forks. Only its repos are released. Case-insensitive. |
 | `BUILD_DIR` | `build_dir` from the [config file](#config-file), else `~/builds/craft-apps` | Where binaries go, in `<name>/`. |
-| `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos. |
+| `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos, with `linux/` and `windows/` subdirectories so both builds can run at once. |
 | `RUSTC_WRAPPER` | `sccache` | Compiler wrapper. Set it empty for none. |
 | `SCCACHE_DIR` | `$XDG_CACHE_HOME/sccache`, else `~/.cache/sccache` | sccache cache. Also what `--clean` removes. |
 | `CRAFT_FONTS_CACHE` | `~/.cache/craft-forks/craft-fonts` | craft-fonts checkout used by font-embedding builds. |
@@ -85,7 +85,7 @@ Repos from both star lists are processed in each phase before the next starts, l
    - For a fork, fast-forward its default branch on GitHub from its parent.
    - Clone into `DEST_DIR/<name>` if missing (forks also get an `upstream` remote); otherwise fetch all remotes with pruning, then tags from `origin` (your fork's tags win).
    - Fast-forward the local default branch to `origin/<branch>`.
-2. **Build**, per synced repo, serially:
+2. **Build**, per synced repo, one repo at a time. A repo's Linux and Windows builds run at the same time; the Windows output is printed after the Linux build finishes:
    - Git dependencies are taken from your copy of the repo (its local clone, else its fork) instead of the URL in `Cargo.lock`. This uses a run-only `insteadOf` rewrite; `Cargo.toml` and `Cargo.lock` are untouched.
    - Any commit pinned by `Cargo.lock` that a clone lacks is fetched into it from your fork first. If that fails the repo isn't built.
    - Fonts: if `.github/workflows/release.yml` pins a [storytold/craft-fonts](https://github.com/storytold/craft-fonts) commit, it is checked out into `CRAFT_FONTS_CACHE` and builds get `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`. If the checkout fails the repo isn't built.

@@ -13,8 +13,10 @@ use std::process::Command;
 pub struct Target {
     /// Asset label, e.g. `linux-x86_64`.
     pub label: &'static str,
-    /// Directory name under the cargo target dir (no glibc suffix).
+    /// Directory name under `target_dir` (no glibc suffix).
     pub triple: &'static str,
+    /// Subdirectory of `CARGO_TARGET_DIR` for this platform's builds.
+    pub target_dir: &'static str,
     /// Binary suffix, `""` or `.exe`.
     pub suffix: &'static str,
     /// Cargo subcommand and target, before `--release`.
@@ -26,6 +28,7 @@ pub struct Target {
 pub const LINUX: Target = Target {
     label: "linux-x86_64",
     triple: "x86_64-unknown-linux-gnu",
+    target_dir: "linux",
     suffix: "",
     cargo_args: &["zigbuild", "--target", "x86_64-unknown-linux-gnu.2.35"],
     extra_env: &[(
@@ -37,6 +40,7 @@ pub const LINUX: Target = Target {
 pub const WINDOWS: Target = Target {
     label: "windows-x86_64",
     triple: "x86_64-pc-windows-msvc",
+    target_dir: "windows",
     suffix: ".exe",
     cargo_args: &["xwin", "build", "--target", "x86_64-pc-windows-msvc"],
     extra_env: &[],
@@ -45,11 +49,13 @@ pub const WINDOWS: Target = Target {
 /// Build `dir` for `target`; copy the binary to `build_dir/<name>/` for `Bin` repos.
 ///
 /// Spec §6.8. Runs in `dir`: `cargo <target.cargo_args> --release [--locked] <selection>`
-/// with `env.apply_cargo` plus `target.extra_env`. Selection: `-p NAME --bin NAME` for `Bin`,
-/// else `--lib` plus `--workspace` unless the root `Cargo.toml` has a line starting
-/// `default-members`. `--locked` iff `git::is_tracked(dir, "Cargo.lock")`. Prints
-/// `Building {name} for {label}...`. Lib kinds then print `Built {name}'s libraries for
-/// {label}.` and return. Bin: `<cargo_target_dir>/<triple>/release/<name><suffix>` must
+/// with `env.apply_cargo` plus `target.extra_env`, and `CARGO_TARGET_DIR` set to
+/// `<cargo_target_dir>/<target_dir>` so platforms can build at once. Selection:
+/// `-p NAME --bin NAME` for `Bin`, else `--lib` plus `--workspace` unless the root
+/// `Cargo.toml` has a line starting `default-members`. `--locked` iff
+/// `git::is_tracked(dir, "Cargo.lock")`. Prints `Building {name} for {label}...`. Lib kinds
+/// then print `Built {name}'s libraries for {label}.` and return. Bin:
+/// `<cargo_target_dir>/<target_dir>/<triple>/release/<name><suffix>` must
 /// exist (`build succeeded but {out} is missing.`), is copied to
 /// `<build_dir>/<name>/<name>-<label><suffix>`, then print `Built: <path>`.
 pub fn build_target(
@@ -70,8 +76,10 @@ pub fn build_target(
 
     log.out(format_args!("Building {name} for {}...", target.label));
     let mut cmd = Command::new("cargo");
+    let target_dir = cfg.cargo_target_dir.join(target.target_dir);
     cmd.args(&args).current_dir(dir);
     env.apply_cargo(&mut cmd);
+    cmd.env("CARGO_TARGET_DIR", &target_dir);
     cmd.envs(target.extra_env.iter().copied());
     let status = log.run(&mut cmd).context("failed to run cargo")?;
     if !status.success() {
@@ -87,11 +95,7 @@ pub fn build_target(
     }
 
     let file = format!("{name}{}", target.suffix);
-    let out = cfg
-        .cargo_target_dir
-        .join(target.triple)
-        .join("release")
-        .join(&file);
+    let out = target_dir.join(target.triple).join("release").join(&file);
     if !out.is_file() {
         bail!("build succeeded but {} is missing.", out.display());
     }

@@ -99,17 +99,33 @@ pub fn build_repo(
     }
 
     let mut built = true;
-    if kind == BuildKind::WindowsLib {
+    let windows_result = if kind == BuildKind::WindowsLib {
         log.out(format!(
             "Not building {repo} for Linux: it only declares Windows targets."
         ));
-    } else if let Err(err) = target::build_target(cfg, &env, kind, &dir, name, &LINUX, log) {
-        log.err(format!("Error: {err:#}"));
-        log.err(format!("WARNING: Linux build of {repo} failed"));
-        fail(&mut out, LINUX.label);
-        built = false;
-    }
-    if let Err(err) = target::build_target(cfg, &env, kind, &dir, name, &WINDOWS, log) {
+        target::build_target(cfg, &env, kind, &dir, name, &WINDOWS, log)
+    } else {
+        let (linux_result, windows_result, windows_log) = std::thread::scope(|scope| {
+            let windows = scope.spawn(|| {
+                let mut windows_log = Log::buffered();
+                let result =
+                    target::build_target(cfg, &env, kind, &dir, name, &WINDOWS, &mut windows_log);
+                (result, windows_log.into_buffer())
+            });
+            let linux_result = target::build_target(cfg, &env, kind, &dir, name, &LINUX, log);
+            let (windows_result, windows_log) = windows.join().expect("Windows build panicked");
+            (linux_result, windows_result, windows_log)
+        });
+        if let Err(err) = linux_result {
+            log.err(format!("Error: {err:#}"));
+            log.err(format!("WARNING: Linux build of {repo} failed"));
+            fail(&mut out, LINUX.label);
+            built = false;
+        }
+        log.write_block(&windows_log);
+        windows_result
+    };
+    if let Err(err) = windows_result {
         log.err(format!("Error: {err:#}"));
         log.err(format!("WARNING: Windows build of {repo} failed"));
         fail(&mut out, WINDOWS.label);

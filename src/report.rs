@@ -62,6 +62,14 @@ impl Log {
         }
     }
 
+    /// Append an already-captured block: printed when live, added to the buffer otherwise.
+    pub fn write_block(&mut self, block: &str) {
+        match &mut self.0 {
+            Sink::Live => print_block(block),
+            Sink::Buffered(buf) => buf.push_str(block),
+        }
+    }
+
     /// The buffered text (empty for a live log).
     pub fn into_buffer(self) -> String {
         match self.0 {
@@ -125,6 +133,14 @@ mod tests {
         log.err("b");
         log.header("x");
         assert_eq!(log.into_buffer(), "a\nb\n\n==== x ====\n");
+    }
+
+    #[test]
+    fn buffered_log_appends_block() {
+        let mut log = Log::buffered();
+        log.out("a");
+        log.write_block("b\nc\n");
+        assert_eq!(log.into_buffer(), "a\nb\nc\n");
     }
 
     #[test]
