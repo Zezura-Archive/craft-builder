@@ -25,6 +25,8 @@ pub struct Config {
     pub rustc_wrapper: String,
     pub craft_fonts_cache: PathBuf,
     pub sccache_dir: PathBuf,
+    /// sccache's cache size limit, e.g. `30G`.
+    pub sccache_cache_size: String,
     /// Owner of the listed repos (`fork_owner` in the config file).
     pub fork_owner: String,
     /// Bare repo names in `fork_owner`.
@@ -151,6 +153,7 @@ impl Config {
             rustc_wrapper: get("RUSTC_WRAPPER").unwrap_or_else(|| "sccache".into()),
             craft_fonts_cache: path_or("CRAFT_FONTS_CACHE", cache.join("craft-fonts")),
             sccache_dir: path_or("SCCACHE_DIR", sccache_base.join("sccache")),
+            sccache_cache_size: nonempty("SCCACHE_CACHE_SIZE").unwrap_or_else(|| "30G".into()),
             fork_owner: file
                 .fork_owner
                 .clone()
@@ -182,7 +185,26 @@ impl Config {
             self.build_dir = writable_dir(&self.build_dir, "build directory")?;
             self.cargo_target_dir = writable_dir(&self.cargo_target_dir, "cargo target directory")?;
         }
+        if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+            for (what, dir) in self.windows_drive_dirs() {
+                eprintln!(
+                    "WARNING: the {what} {} is on a Windows drive; git and cargo are much slower there than on the WSL filesystem.",
+                    dir.display()
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// The source and cache dirs this run uses that are under `/mnt` (Windows drives on WSL).
+    fn windows_drive_dirs(&self) -> Vec<(&'static str, &Path)> {
+        let mut dirs = vec![("destination directory", self.dest_dir.as_path())];
+        if self.build {
+            dirs.push(("cargo target directory", &self.cargo_target_dir));
+            dirs.push(("sccache directory", &self.sccache_dir));
+        }
+        dirs.retain(|(_, dir)| dir.starts_with("/mnt"));
+        dirs
     }
 }
 
@@ -305,6 +327,11 @@ mod tests {
             Path::new("/home/u/.cache/craft-forks/craft-fonts")
         );
         assert_eq!(c.sccache_dir, Path::new("/home/u/.cache/sccache"));
+        assert_eq!(c.sccache_cache_size, "30G");
+        assert_eq!(
+            config(&[("SCCACHE_CACHE_SIZE", "50G")]).sccache_cache_size,
+            "50G"
+        );
         assert!(c.build && c.release);
     }
 
@@ -315,6 +342,23 @@ mod tests {
         let file = FileConfig::load(Some(&path), Path::new("/h"), |_| None);
         std::fs::remove_dir_all(dir).unwrap();
         file
+    }
+
+    #[test]
+    fn windows_drive_dirs_are_those_under_mnt() {
+        let mut c = config(&[
+            ("CARGO_TARGET_DIR", "/mnt/c/target"),
+            ("SCCACHE_DIR", "/mnt2/s"),
+        ]);
+        let names = |c: &Config| -> Vec<&str> {
+            c.windows_drive_dirs()
+                .into_iter()
+                .map(|(what, _)| what)
+                .collect()
+        };
+        assert_eq!(names(&c), ["cargo target directory"]);
+        c.build = false;
+        assert!(names(&c).is_empty());
     }
 
     #[test]

@@ -62,24 +62,27 @@ Empty values count as unset, except where noted.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos. |
+| `CARGO_TARGET_DIR` | `~/.cache/craft-forks/target` | Cargo target dir shared by all repos, with `linux/` and `windows/` subdirectories so both builds can run at once. |
 | `RUSTC_WRAPPER` | `sccache` | Compiler wrapper. Set it empty for none. |
+| `SCCACHE_CACHE_SIZE` | `30G` | sccache's cache size limit. Takes effect when the sccache server starts; run `sccache --stop-server` after changing it. |
 | `SCCACHE_DIR` | `$XDG_CACHE_HOME/sccache`, else `~/.cache/sccache` | sccache cache. Also what `--clean` removes. |
 | `CRAFT_FONTS_CACHE` | `~/.cache/craft-forks/craft-fonts` | craft-fonts checkout used by font-embedding builds. |
 | `XDG_CONFIG_HOME` | `~/.config` | Where the default [config file](#config-file) is looked for. |
 | `HOME` | none | Required. |
 
+On WSL, a warning is printed when `clone_dir`, `CARGO_TARGET_DIR` or `SCCACHE_DIR` is under `/mnt/`: that's a Windows drive, where git and cargo are much slower.
+
 The token variables are listed under [Token](#token).
 
 ## Phases
 
-Libraries are synced first, in a pass that finishes before the apps are synced. Libraries are not built or released, but apps use them for git dependencies. Each phase finishes before the next starts.
+Libraries are synced first, in a pass that finishes before the apps are synced. Libraries are not built or released, but apps use them for git dependencies. Sync finishes for all repos before builds start; each app's release overlaps the next app's build (see Release).
 
 1. **Sync**, per repo:
    - For a fork, fast-forward its default branch on GitHub from its parent.
    - Clone into `clone_dir/<name>` if missing (forks also get an `upstream` remote); otherwise fetch all remotes with pruning, then tags from `origin` (your fork's tags win).
    - Fast-forward the local default branch to `origin/<branch>`.
-2. **Build**, per synced app, serially:
+2. **Build**, per synced app, one app at a time. An app's Linux and Windows builds run at the same time; the Windows output is printed after the Linux build finishes:
    - Git dependencies are taken from your copy of the repo (its local clone, else its fork) instead of the URL in `Cargo.lock`. This uses a run-only `insteadOf` rewrite; `Cargo.toml` and `Cargo.lock` are untouched.
    - Any commit pinned by `Cargo.lock` that a clone lacks is fetched into it from your fork first. If that fails the repo isn't built.
    - A git dependency with no copy in your config's `libraries` (including non-GitHub ones) fails the build instead of being fetched from upstream. Add its fork to `libraries`.
@@ -92,7 +95,7 @@ Libraries are synced first, in a pass that finishes before the apps are synced. 
    - Apps with libraries but no such binary get their workspace libraries compiled for both targets and are not released.
    - Apps with neither are only synced.
    - sccache hit/miss stats are printed at the end of the run.
-3. **Release**, per built app:
+3. **Release**, per built app. Each app is released as soon as it's built, one release at a time, while the next app builds. Release output is printed between builds, never in the middle of one:
    - Only repos owned by `fork_owner` and built for both targets are released.
    - The release tag is `v<version>-forked`, from the binary's version in `cargo metadata`, targeting the built commit.
    - An existing release for that tag is updated in place: its tag is moved to the built commit, and assets and notes are replaced. If the tag already points at the built commit, nothing is done.
